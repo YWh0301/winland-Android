@@ -277,6 +277,7 @@ UP_EOF
         externalStoragePath: String,
         density: Float
     ): String {
+        val desktopScale = density.coerceIn(0.5f, 1.5f)
         return """
             #!/system/bin/sh
             # Allow execution even if some background tasks fail
@@ -521,14 +522,14 @@ PULSE_EOF
                 ln -sfn "${'$'}WINLAND_SOCKET_DIR/wayland-0" "${'$'}XDG_RUNTIME_DIR/wayland-0"
                 log_runtime_guest 'RUN: linked wayland socket into private runtime dir'
 
-                # Execute glmark2-wayland instead of launching XFCE/LabWC
-                log_runtime_guest 'RUN: launching glmark2-wayland'
+                # Launch XFCE desktop session via Wayland
+                log_runtime_guest 'RUN: launching XFCE desktop session'
 
-                # Setup Environment for Wayland benchmark runtime
+                # Setup Environment for Wayland runtime
                 export DISPLAY=:0
                 export WAYLAND_DISPLAY=wayland-0
                 export XDG_SESSION_TYPE=wayland
-                export XDG_CURRENT_DESKTOP=Winland
+                export XDG_CURRENT_DESKTOP=XFCE
                 export XCURSOR_PATH=/usr/share/icons
                 export XCURSOR_THEME=default
                 export QT_QPA_PLATFORM=wayland
@@ -536,21 +537,17 @@ PULSE_EOF
                 export SDL_VIDEODRIVER=wayland
                 export PULSE_SERVER=$PULSE_SERVER_VAL
                 export GDK_SCALE=1
-                export GDK_DPI_SCALE=$density
-                export ELM_SCALE=$density
+                export GDK_DPI_SCALE=$desktopScale
+                export ELM_SCALE=$desktopScale
                 export QT_AUTO_SCREEN_SCALE_FACTOR=1
-                export QT_SCALE_FACTOR=$density
+                export QT_SCALE_FACTOR=$desktopScale
 
-                # Launch glmark2-wayland benchmark as the main session
-                if command -v glmark2-wayland >/dev/null 2>&1; then
-                    log_runtime_guest "RUN: launching glmark2-wayland..."
-                    if glmark2-wayland --help 2>/dev/null | grep -q -- '--run-forever'; then
-                        run_in_dbus_session glmark2-wayland --run-forever >/tmp/glmark2-wayland.log 2>&1
-                    else
-                        run_in_dbus_session glmark2-wayland >/tmp/glmark2-wayland.log 2>&1
-                    fi
+                # Launch startxfce4 as the main desktop session
+                if command -v startxfce4 >/dev/null 2>&1; then
+                    log_runtime_guest "RUN: launching startxfce4 --wayland..."
+                    run_in_dbus_session startxfce4 --wayland >/tmp/xfce4-wayland.log 2>&1
                 else
-                    log_runtime_guest "FATAL: glmark2-wayland not found in guest PATH"
+                    log_runtime_guest "FATAL: startxfce4 not found in guest PATH"
                     exit 1
                 fi
 CHROOT_EOF
@@ -580,7 +577,6 @@ CHROOT_EOF
                 command -v pkill >/dev/null 2>&1 && pkill -f startxfce4 || true
                 command -v pkill >/dev/null 2>&1 && pkill -f xfce4-session || true
                 command -v pkill >/dev/null 2>&1 && pkill -f labwc || true
-                command -v pkill >/dev/null 2>&1 && pkill -f glmark2-wayland || true
                 command -v pkill >/dev/null 2>&1 && pkill -f pulseaudio || true
                 command -v pkill >/dev/null 2>&1 && pkill -f dbus-daemon || true
             ' || true
@@ -588,7 +584,6 @@ CHROOT_EOF
             pkill -f startxfce4 2>/dev/null || true
             pkill -f xfce4-session 2>/dev/null || true
             pkill -f labwc 2>/dev/null || true
-            pkill -f glmark2-wayland 2>/dev/null || true
             pkill -f pulseaudio 2>/dev/null || true
             pkill -f dbus-daemon 2>/dev/null || true
 

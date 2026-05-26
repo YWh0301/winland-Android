@@ -30,7 +30,6 @@ install_desktop_packages() {
         labwc \
         xwayland \
         dbus-x11 \
-        glmark2-wayland \
         pulseaudio-utils
 }
 

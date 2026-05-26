@@ -60,7 +60,6 @@ import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.view.WindowCompat
@@ -99,6 +98,15 @@ class DisplayActivity : ComponentActivity() {
         }
     }
 
+    // One-shot modifier: Ctrl/Alt toggled from bar sends DOWN immediately,
+    // auto-releases on the next non-modifier key's UP event.
+    private var ctrlOneShotPending: Boolean = false
+    private var altOneShotPending: Boolean = false
+
+    // Compose-observable state (crosses composable/Activity boundary)
+    private val _ctrlActive = mutableStateOf(false)
+    private val _altActive = mutableStateOf(false)
+
     companion object {
         private const val MOVE_DISPATCH_MIN_INTERVAL_MS = 8L
         // Reference to the active SurfaceView for drawing frames
@@ -106,18 +114,6 @@ class DisplayActivity : ComponentActivity() {
         private var activeSurfaceView: WaylandInputSurfaceView? = null
         @Volatile
         private var currentActivityRef: WeakReference<Activity>? = null
-        @Volatile
-        private var surfaceTouchTotal: Long = 0
-        @Volatile
-        private var surfaceTouchDown: Long = 0
-        @Volatile
-        private var surfaceTouchMove: Long = 0
-        @Volatile
-        private var surfaceTouchUp: Long = 0
-        @Volatile
-        private var surfaceTouchCancel: Long = 0
-        @Volatile
-        private var surfaceLastTouch: String = "none"
 
         /**
          * Called from JNI (NativeBridge.onKeyboardInitFailed) to إظهار رسالة فشل تهيئة الكيبورد.
@@ -148,48 +144,6 @@ class DisplayActivity : ComponentActivity() {
             get() = try {
                 currentActivityRef?.get()
             } catch (_: Exception) { null }
-
-        @JvmStatic
-        fun recordSurfaceTouch(
-            action: Int,
-            pointerId: Int,
-            pointerCount: Int,
-            x: Float,
-            y: Float,
-            hasFocus: Boolean
-        ) {
-            surfaceTouchTotal += 1
-            when (action) {
-                android.view.MotionEvent.ACTION_DOWN,
-                android.view.MotionEvent.ACTION_POINTER_DOWN -> surfaceTouchDown += 1
-                android.view.MotionEvent.ACTION_MOVE -> surfaceTouchMove += 1
-                android.view.MotionEvent.ACTION_UP,
-                android.view.MotionEvent.ACTION_POINTER_UP -> surfaceTouchUp += 1
-                android.view.MotionEvent.ACTION_CANCEL -> surfaceTouchCancel += 1
-            }
-            surfaceLastTouch =
-                "action=${motionActionName(action)} id=$pointerId pointers=$pointerCount x=${x.toInt()} y=${y.toInt()} focus=$hasFocus"
-        }
-
-        @JvmStatic
-        fun resetSurfaceTouchStats() {
-            surfaceTouchTotal = 0
-            surfaceTouchDown = 0
-            surfaceTouchMove = 0
-            surfaceTouchUp = 0
-            surfaceTouchCancel = 0
-            surfaceLastTouch = "none"
-        }
-
-        private fun motionActionName(action: Int): String = when (action) {
-            android.view.MotionEvent.ACTION_DOWN -> "DOWN"
-            android.view.MotionEvent.ACTION_UP -> "UP"
-            android.view.MotionEvent.ACTION_MOVE -> "MOVE"
-            android.view.MotionEvent.ACTION_CANCEL -> "CANCEL"
-            android.view.MotionEvent.ACTION_POINTER_DOWN -> "POINTER_DOWN"
-            android.view.MotionEvent.ACTION_POINTER_UP -> "POINTER_UP"
-            else -> action.toString()
-        }
 
         /** Called from JNI when a Wayland app enables text input — show Android soft keyboard. */
         @JvmStatic
@@ -264,20 +218,9 @@ class DisplayActivity : ComponentActivity() {
         NativeBridge.setClipboardListener(waylandClipboardListener)
 
         setContent {
-            var showTouchMonitor by remember { mutableStateOf(false) }
-            var touchMonitorText by remember { mutableStateOf("") }
             var keyboardVisible by remember { mutableStateOf(false) }
-            var ctrlActive by remember { mutableStateOf(false) }
-            var altActive by remember { mutableStateOf(false) }
-
-            LaunchedEffect(showTouchMonitor) {
-                if (showTouchMonitor) {
-                    while (showTouchMonitor) {
-                        touchMonitorText = buildTouchMonitorReport()
-                        delay(500)
-                    }
-                }
-            }
+            val ctrlActive by _ctrlActive
+            val altActive by _altActive
 
             val imeCheckView = LocalView.current
             LaunchedEffect(Unit) {
@@ -320,48 +263,23 @@ class DisplayActivity : ComponentActivity() {
                                 ctrlActive = ctrlActive,
                                 altActive = altActive,
                                 onModifierToggle = { key, active ->
-                                    if (key == "CTRL") ctrlActive = active
-                                    if (key == "ALT") altActive = active
+                                    if (key == "CTRL") {
+                                        _ctrlActive.value = active
+                                        if (NativeBridge.isLoaded()) {
+                                            NativeBridge.sendKeyEvent(KeyEvent.KEYCODE_CTRL_LEFT, active)
+                                        }
+                                        ctrlOneShotPending = active
+                                    }
+                                    if (key == "ALT") {
+                                        _altActive.value = active
+                                        if (NativeBridge.isLoaded()) {
+                                            NativeBridge.sendKeyEvent(KeyEvent.KEYCODE_ALT_LEFT, active)
+                                        }
+                                        altOneShotPending = active
+                                    }
                                 }
                             )
                         }
-                    }
-
-                    if (showTouchMonitor) {
-                        Box(
-                            modifier = Modifier
-                                .align(Alignment.TopStart)
-                                .padding(12.dp)
-                                .background(Color.Black.copy(alpha = 0.82f))
-                                .padding(horizontal = 10.dp, vertical = 8.dp)
-                        ) {
-                            Text(
-                                text = touchMonitorText,
-                                color = Color.White,
-                                style = MaterialTheme.typography.labelSmall,
-                                fontFamily = FontFamily.Monospace
-                            )
-                        }
-                    }
-
-                    SmallFloatingActionButton(
-                        onClick = {
-                            showTouchMonitor = !showTouchMonitor
-                            if (showTouchMonitor) {
-                                resetSurfaceTouchStats()
-                                touchMonitorText = buildTouchMonitorReport()
-                            }
-                        },
-                        modifier = Modifier
-                            .align(Alignment.TopEnd)
-                            .padding(16.dp),
-                        containerColor = if (showTouchMonitor) {
-                            MaterialTheme.colorScheme.tertiary.copy(alpha = 0.75f)
-                        } else {
-                            MaterialTheme.colorScheme.secondary.copy(alpha = 0.6f)
-                        }
-                    ) {
-                        Text("MON", color = Color.White, style = MaterialTheme.typography.labelSmall)
                     }
 
                     // Translucent floating keyboard button — always visible
@@ -426,9 +344,6 @@ class DisplayActivity : ComponentActivity() {
                         view.hapticTap()
                         val newState = !ctrlActive
                         onModifierToggle("CTRL", newState)
-                        runIfNativeLoaded("CTRL") {
-                            NativeBridge.sendKeyEvent(KeyEvent.KEYCODE_CTRL_LEFT, newState)
-                        }
                     },
                     contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp, vertical = 4.dp),
                     colors = ButtonDefaults.buttonColors(containerColor = bgColor)
@@ -446,9 +361,6 @@ class DisplayActivity : ComponentActivity() {
                         view.hapticTap()
                         val newState = !altActive
                         onModifierToggle("ALT", newState)
-                        runIfNativeLoaded("ALT") {
-                            NativeBridge.sendKeyEvent(KeyEvent.KEYCODE_ALT_LEFT, newState)
-                        }
                     },
                     contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp, vertical = 4.dp),
                     colors = ButtonDefaults.buttonColors(containerColor = bgColor)
@@ -491,48 +403,12 @@ class DisplayActivity : ComponentActivity() {
         }
     }
 
-    private fun buildTouchMonitorReport(): String {
-        val nativeStats = runCatching { NativeBridge.getWaylandRuntimeStats() }
-            .getOrElse { "native_error=${it.message ?: "unknown"}" }
-        val injectorTouches = extractLong(nativeStats, "td=(\\d+)") +
-            extractLong(nativeStats, "tm=(\\d+)") +
-            extractLong(nativeStats, "tu=(\\d+)") +
-            extractLong(nativeStats, "tc=(\\d+)")
-        val smithayInjected = extractLong(nativeStats, "injected_events=(\\d+)")
-        val diagnosis = when {
-            surfaceTouchTotal == 0L -> "diagnosis=system_or_surface_view"
-            surfaceTouchTotal > 0L && injectorTouches == 0L -> "diagnosis=android_to_jni_gap"
-            injectorTouches > 0L && smithayInjected == 0L -> "diagnosis=smithay_injection_gap"
-            else -> "diagnosis=smithay_receiving_events"
-        }
-
-        return buildString {
-            appendLine(diagnosis)
-            appendLine(
-                "surface(total=$surfaceTouchTotal down=$surfaceTouchDown move=$surfaceTouchMove up=$surfaceTouchUp cancel=$surfaceTouchCancel)"
-            )
-            appendLine("surface_last=$surfaceLastTouch")
-            val lastSeat = Regex("(?:last_seat|last_seat_dispatch)=([^|]+)")
-                .find(nativeStats)
-                ?.groupValues
-                ?.getOrNull(1)
-                ?.trim()
-                ?: "unknown"
-            appendLine("seat_dispatch=$lastSeat")
-            append("native=$nativeStats")
-        }
-    }
-
-    private fun extractLong(text: String, pattern: String): Long {
-        return Regex(pattern).find(text)?.groupValues?.getOrNull(1)?.toLongOrNull() ?: 0L
-    }
-
     @Composable
     fun LinuxDisplay() {
         AndroidView(
             factory = { context ->
                 Log.i("WinlandDiag", "LinuxDisplay: AndroidView Factory invoked")
-                WaylandInputSurfaceView(context).apply {
+                WaylandInputSurfaceView(context, ::releaseOneShotModifiers, { _ctrlActive.value }, { _altActive.value }).apply {
                     requestFocus()
                     holder.addCallback(object : SurfaceHolder.Callback {
                         override fun surfaceCreated(holder: SurfaceHolder) {
@@ -855,6 +731,14 @@ class DisplayActivity : ComponentActivity() {
         // Wayland resize events should be handled here if supported by the bridge
     }
 
+    private fun isModifierKey(keyCode: Int): Boolean = keyCode in listOf(
+        KeyEvent.KEYCODE_CTRL_LEFT, KeyEvent.KEYCODE_CTRL_RIGHT,
+        KeyEvent.KEYCODE_ALT_LEFT, KeyEvent.KEYCODE_ALT_RIGHT,
+        KeyEvent.KEYCODE_SHIFT_LEFT, KeyEvent.KEYCODE_SHIFT_RIGHT,
+        KeyEvent.KEYCODE_META_LEFT, KeyEvent.KEYCODE_META_RIGHT,
+        KeyEvent.KEYCODE_SYM, KeyEvent.KEYCODE_FUNCTION
+    )
+
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
         runIfNativeLoaded("onKeyDown:$keyCode") {
             NativeBridge.sendKeyEvent(keyCode, true)
@@ -866,15 +750,89 @@ class DisplayActivity : ComponentActivity() {
         runIfNativeLoaded("onKeyUp:$keyCode") {
             NativeBridge.sendKeyEvent(keyCode, false)
         }
+
+        if (ctrlOneShotPending && !isModifierKey(keyCode)) {
+            ctrlOneShotPending = false
+            _ctrlActive.value = false
+            if (NativeBridge.isLoaded()) {
+                NativeBridge.sendKeyEvent(KeyEvent.KEYCODE_CTRL_LEFT, false)
+            }
+        }
+        if (altOneShotPending && !isModifierKey(keyCode)) {
+            altOneShotPending = false
+            _altActive.value = false
+            if (NativeBridge.isLoaded()) {
+                NativeBridge.sendKeyEvent(KeyEvent.KEYCODE_ALT_LEFT, false)
+            }
+        }
+
         return super.onKeyUp(keyCode, event)
     }
 
+    private fun releaseOneShotModifiers() {
+        if (ctrlOneShotPending) {
+            ctrlOneShotPending = false
+            runOnUiThread { _ctrlActive.value = false }
+            if (NativeBridge.isLoaded()) {
+                NativeBridge.sendKeyEvent(KeyEvent.KEYCODE_CTRL_LEFT, false)
+            }
+        }
+        if (altOneShotPending) {
+            altOneShotPending = false
+            runOnUiThread { _altActive.value = false }
+            if (NativeBridge.isLoaded()) {
+                NativeBridge.sendKeyEvent(KeyEvent.KEYCODE_ALT_LEFT, false)
+            }
+        }
+    }
+
     @android.annotation.SuppressLint("ClickableViewAccessibility")
-    private class WaylandInputSurfaceView(context: Context) : SurfaceView(context) {
+    private class WaylandInputSurfaceView(context: Context, private val onImeCommit: () -> Unit, private val ctrlActive: () -> Boolean, private val altActive: () -> Boolean) : SurfaceView(context) {
+        companion object {
+            private fun charToKeyCode(ch: Char): Int? = when (ch.uppercaseChar()) {
+                'A' -> KeyEvent.KEYCODE_A; 'B' -> KeyEvent.KEYCODE_B
+                'C' -> KeyEvent.KEYCODE_C; 'D' -> KeyEvent.KEYCODE_D
+                'E' -> KeyEvent.KEYCODE_E; 'F' -> KeyEvent.KEYCODE_F
+                'G' -> KeyEvent.KEYCODE_G; 'H' -> KeyEvent.KEYCODE_H
+                'I' -> KeyEvent.KEYCODE_I; 'J' -> KeyEvent.KEYCODE_J
+                'K' -> KeyEvent.KEYCODE_K; 'L' -> KeyEvent.KEYCODE_L
+                'M' -> KeyEvent.KEYCODE_M; 'N' -> KeyEvent.KEYCODE_N
+                'O' -> KeyEvent.KEYCODE_O; 'P' -> KeyEvent.KEYCODE_P
+                'Q' -> KeyEvent.KEYCODE_Q; 'R' -> KeyEvent.KEYCODE_R
+                'S' -> KeyEvent.KEYCODE_S; 'T' -> KeyEvent.KEYCODE_T
+                'U' -> KeyEvent.KEYCODE_U; 'V' -> KeyEvent.KEYCODE_V
+                'W' -> KeyEvent.KEYCODE_W; 'X' -> KeyEvent.KEYCODE_X
+                'Y' -> KeyEvent.KEYCODE_Y; 'Z' -> KeyEvent.KEYCODE_Z
+                else -> null
+            }
+        }
         private var lastMoveDispatchUptimeMs: Long = 0L
 
+        private val mainHandler = android.os.Handler(context.mainLooper)
+
+        private val LONG_PRESS_MS = 400L
+        private val LONG_PRESS_MOVE_THRESHOLD_PX = 20f
+
+        private enum class GestureState {
+            IDLE,
+            TAP_PENDING,
+            DRAG_ACTIVE,
+            MOVING
+        }
+
+        private var gestureState = GestureState.IDLE
+        private var primaryPointerId = -1
+        private var primaryDownX = 0f
+        private var primaryDownY = 0f
+        private var lastDragX = 0f
+        private var lastDragY = 0f
+
+        private val longPressRunnable = Runnable {
+            if (gestureState != GestureState.TAP_PENDING) return@Runnable
+            gestureState = GestureState.DRAG_ACTIVE
+        }
+
         init {
-            // setZOrderOnTop removed: default Z-order lets Compose overlays render above SurfaceView
             holder.setFormat(android.graphics.PixelFormat.RGBA_8888)
             isFocusable = true
             isFocusableInTouchMode = true
@@ -884,68 +842,152 @@ class DisplayActivity : ComponentActivity() {
         @android.annotation.SuppressLint("ClickableViewAccessibility")
         override fun onTouchEvent(event: android.view.MotionEvent): Boolean {
             if (!holder.surface.isValid) {
-                // Drop input while the Surface is invalid to avoid JNI pressure during teardown/rebind.
                 return true
             }
 
             val actionMasked = event.actionMasked
+
+            // Two-finger right-click: intercept before trackpad routing to avoid
+            // lifecycle issues with the second finger's touch ID.
+            if (actionMasked == android.view.MotionEvent.ACTION_POINTER_DOWN && event.pointerCount >= 2) {
+                if (NativeBridge.isLoaded()) {
+                    val now = (SystemClock.uptimeMillis() and 0x7FFFFFFF).toInt()
+                    NativeBridge.sendTrackpadClick(1, 0x111, now)
+                    this.postDelayed({
+                        NativeBridge.sendTrackpadClick(0, 0x111,
+                            (SystemClock.uptimeMillis() and 0x7FFFFFFF).toInt())
+                    }, 50)
+                }
+                return true
+            }
+
             when (actionMasked) {
-                android.view.MotionEvent.ACTION_DOWN,
-                android.view.MotionEvent.ACTION_POINTER_DOWN -> {
-                    // Prevent any parent ViewGroup or Compose container from stealing events
+                android.view.MotionEvent.ACTION_DOWN -> {
                     parent?.requestDisallowInterceptTouchEvent(true)
                     requestFocus()
                     val i = event.actionIndex
-                    recordSurfaceTouch(actionMasked, event.getPointerId(i), event.pointerCount, event.getX(i), event.getY(i), hasWindowFocus())
+                    val pointerId = event.getPointerId(i)
+                    val x = event.getX(i)
+                    val y = event.getY(i)
+
+                    gestureState = GestureState.TAP_PENDING
+                    primaryPointerId = pointerId
+                    primaryDownX = x
+                    primaryDownY = y
+                    lastDragX = x
+                    lastDragY = y
+
                     if (NativeBridge.isLoaded()) {
-                        NativeBridge.sendTouchEvent(actionMasked, event.getPointerId(i), event.getX(i), event.getY(i))
+                        NativeBridge.sendTouchEvent(actionMasked, pointerId, x, y)
+                    }
+                    mainHandler.postDelayed(longPressRunnable, LONG_PRESS_MS)
+                }
+
+                android.view.MotionEvent.ACTION_POINTER_DOWN -> {
+                    if (gestureState == GestureState.TAP_PENDING || gestureState == GestureState.DRAG_ACTIVE) {
+                        mainHandler.removeCallbacks(longPressRunnable)
+                        if (NativeBridge.isLoaded()) {
+                            val now = (SystemClock.uptimeMillis() and 0x7FFFFFFF).toInt()
+                            NativeBridge.sendTrackpadClick(1, 3, now)
+                            NativeBridge.sendTrackpadClick(0, 3, now)
+                            NativeBridge.sendTouchEvent(
+                                android.view.MotionEvent.ACTION_CANCEL,
+                                primaryPointerId, primaryDownX, primaryDownY
+                            )
+                        }
+                        gestureState = GestureState.IDLE
                     }
                 }
-                android.view.MotionEvent.ACTION_MOVE -> {
-                    val now = SystemClock.uptimeMillis()
-                    if (now - lastMoveDispatchUptimeMs < MOVE_DISPATCH_MIN_INTERVAL_MS) {
-                        return true
-                    }
-                    lastMoveDispatchUptimeMs = now
 
-                    for (i in 0 until event.pointerCount) {
-                        recordSurfaceTouch(
-                            android.view.MotionEvent.ACTION_MOVE,
-                            event.getPointerId(i),
-                            event.pointerCount,
-                            event.getX(i),
-                            event.getY(i),
-                            hasWindowFocus()
-                        )
-                        if (NativeBridge.isLoaded()) {
-                            NativeBridge.sendTouchEvent(
-                                android.view.MotionEvent.ACTION_MOVE,
-                                event.getPointerId(i),
-                                event.getX(i),
-                                event.getY(i)
-                            )
+                android.view.MotionEvent.ACTION_MOVE -> {
+                    if (gestureState == GestureState.TAP_PENDING) {
+                        var movedEnough = false
+                        for (i in 0 until event.pointerCount) {
+                            val pid = event.getPointerId(i)
+                            if (pid == primaryPointerId) {
+                                val dx = event.getX(i) - primaryDownX
+                                val dy = event.getY(i) - primaryDownY
+                                if (dx * dx + dy * dy > LONG_PRESS_MOVE_THRESHOLD_PX * LONG_PRESS_MOVE_THRESHOLD_PX) {
+                                    movedEnough = true
+                                }
+                            }
+                        }
+                        if (movedEnough) {
+                            mainHandler.removeCallbacks(longPressRunnable)
+                            if (NativeBridge.isLoaded()) {
+                                NativeBridge.sendTouchEvent(
+                                    android.view.MotionEvent.ACTION_CANCEL,
+                                    primaryPointerId, primaryDownX, primaryDownY
+                                )
+                            }
+                            for (i in 0 until event.pointerCount) {
+                                val pid = event.getPointerId(i)
+                                if (pid == primaryPointerId) {
+                                    lastDragX = event.getX(i)
+                                    lastDragY = event.getY(i)
+                                }
+                            }
+                            gestureState = GestureState.MOVING
+                        }
+                    }
+
+                    if (gestureState == GestureState.DRAG_ACTIVE) {
+                        for (i in 0 until event.pointerCount) {
+                            val pid = event.getPointerId(i)
+                            if (pid == primaryPointerId) {
+                                if (NativeBridge.isLoaded()) {
+                                    NativeBridge.sendTouchEvent(
+                                        android.view.MotionEvent.ACTION_MOVE,
+                                        pid, event.getX(i), event.getY(i)
+                                    )
+                                }
+                            }
+                        }
+                    } else if (gestureState == GestureState.MOVING) {
+                        for (i in 0 until event.pointerCount) {
+                            val pid = event.getPointerId(i)
+                            if (pid == primaryPointerId) {
+                                val dx = event.getX(i) - lastDragX
+                                val dy = event.getY(i) - lastDragY
+                                lastDragX = event.getX(i)
+                                lastDragY = event.getY(i)
+                                if (NativeBridge.isLoaded()) {
+                                    val now = (SystemClock.uptimeMillis() and 0x7FFFFFFF).toInt()
+                                    NativeBridge.sendRelativeMotion(dx, dy, now)
+                                }
+                            }
                         }
                     }
                 }
-                android.view.MotionEvent.ACTION_UP,
-                android.view.MotionEvent.ACTION_POINTER_UP -> {
+
+                android.view.MotionEvent.ACTION_UP -> {
+                    mainHandler.removeCallbacks(longPressRunnable)
                     val i = event.actionIndex
-                    recordSurfaceTouch(actionMasked, event.getPointerId(i), event.pointerCount, event.getX(i), event.getY(i), hasWindowFocus())
-                    if (NativeBridge.isLoaded()) {
-                        NativeBridge.sendTouchEvent(actionMasked, event.getPointerId(i), event.getX(i), event.getY(i))
+                    val pointerId = event.getPointerId(i)
+                    val x = event.getX(i)
+                    val y = event.getY(i)
+                    if (gestureState == GestureState.TAP_PENDING) {
+                        if (NativeBridge.isLoaded()) {
+                            NativeBridge.sendTouchEvent(actionMasked, pointerId, x, y)
+                        }
+                    } else if (gestureState == GestureState.DRAG_ACTIVE && pointerId == primaryPointerId) {
+                        if (NativeBridge.isLoaded()) {
+                            NativeBridge.sendTouchEvent(actionMasked, pointerId, x, y)
+                        }
                     }
-                    if (actionMasked == android.view.MotionEvent.ACTION_UP) {
-                        parent?.requestDisallowInterceptTouchEvent(false)
-                        performClick()
-                    }
+                    gestureState = GestureState.IDLE
+                    parent?.requestDisallowInterceptTouchEvent(false)
+                    performClick()
                 }
+
                 android.view.MotionEvent.ACTION_CANCEL -> {
+                    mainHandler.removeCallbacks(longPressRunnable)
+                    gestureState = GestureState.IDLE
                     parent?.requestDisallowInterceptTouchEvent(false)
                     for (i in 0 until event.pointerCount) {
                         val pointerId = event.getPointerId(i)
                         val x = event.getX(i)
                         val y = event.getY(i)
-                        recordSurfaceTouch(android.view.MotionEvent.ACTION_CANCEL, pointerId, event.pointerCount, x, y, hasWindowFocus())
                         if (NativeBridge.isLoaded()) {
                             NativeBridge.sendTouchEvent(android.view.MotionEvent.ACTION_CANCEL,
                                 pointerId, x, y)
@@ -974,19 +1016,34 @@ class DisplayActivity : ComponentActivity() {
 
             return object : BaseInputConnection(this, false) {
                 override fun commitText(text: CharSequence?, newCursorPosition: Int): Boolean {
-                    if (!text.isNullOrEmpty()) {
-                        if (NativeBridge.isLoaded()) {
-                            NativeBridge.sendTextInput(text.toString())
+                    if (!text.isNullOrEmpty() && NativeBridge.isLoaded()) {
+                        val str = text.toString()
+                        val ctrl = ctrlActive()
+                        val alt = altActive()
+
+                        if ((ctrl || alt) && str.length == 1 && str[0].isLetter()) {
+                            val keyCode = charToKeyCode(str[0])
+                            if (keyCode != null) {
+                                if (ctrl) NativeBridge.sendKeyEvent(KeyEvent.KEYCODE_CTRL_LEFT, true)
+                                if (alt) NativeBridge.sendKeyEvent(KeyEvent.KEYCODE_ALT_LEFT, true)
+                                NativeBridge.sendKeyEvent(keyCode, true)
+                                NativeBridge.sendKeyEvent(keyCode, false)
+                                if (alt) NativeBridge.sendKeyEvent(KeyEvent.KEYCODE_ALT_LEFT, false)
+                                if (ctrl) NativeBridge.sendKeyEvent(KeyEvent.KEYCODE_CTRL_LEFT, false)
+                                onImeCommit()
+                                return true
+                            }
                         }
+
+                        NativeBridge.sendTextInput(str)
                     }
+                    onImeCommit()
                     return true
                 }
 
                 override fun setComposingText(text: CharSequence?, newCursorPosition: Int): Boolean {
-                    if (!text.isNullOrEmpty()) {
-                        if (NativeBridge.isLoaded()) {
-                            NativeBridge.sendTextInput(text.toString())
-                        }
+                    if (!text.isNullOrEmpty() && NativeBridge.isLoaded()) {
+                        NativeBridge.sendTextInput(text.toString())
                     }
                     return true
                 }
@@ -1003,6 +1060,9 @@ class DisplayActivity : ComponentActivity() {
                 override fun sendKeyEvent(event: KeyEvent): Boolean {
                     if (NativeBridge.isLoaded()) {
                         NativeBridge.sendKeyEvent(event.keyCode, event.action == KeyEvent.ACTION_DOWN)
+                    }
+                    if (event.action == KeyEvent.ACTION_UP) {
+                        onImeCommit()
                     }
                     return true
                 }

@@ -529,24 +529,42 @@ private fun SettingsPanel(
         )
 
         ElevatedCard(colors = CardDefaults.elevatedCardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHigh)) {
-            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text("Display", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
 
-                Row(
-                    modifier = Modifier.horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    val chips = listOf(resolution1080p, resolution720p)
-                    chips.forEach { option ->
-                        FilterChip(
-                            selected = selectedResolution.label == option.label,
-                            onClick = {
-                                selectedResolutionLabel = option.label
-                                NativeBridge.setScaleSafe(option.scale)
-                                onResolutionApplied("${option.label}: scale=${option.scale}")
-                            },
-                            label = { Text(option.label) }
-                        )
+                listOf(resolution1080p, resolution720p).forEach { option ->
+                    Surface(
+                        onClick = {
+                            selectedResolutionLabel = option.label
+                            NativeBridge.setScaleSafe(option.scale)
+                            onResolutionApplied("${option.label}: scale=${option.scale}")
+                        },
+                        shape = RoundedCornerShape(12.dp),
+                        color = MaterialTheme.colorScheme.surface,
+                        tonalElevation = 1.dp,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp, vertical = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text(
+                                text = option.label,
+                                style = MaterialTheme.typography.bodyLarge,
+                                fontWeight = FontWeight.Medium
+                            )
+                            Switch(
+                                checked = selectedResolution.label == option.label,
+                                onCheckedChange = {
+                                    selectedResolutionLabel = option.label
+                                    NativeBridge.setScaleSafe(option.scale)
+                                    onResolutionApplied("${option.label}: scale=${option.scale}")
+                                }
+                            )
+                        }
                     }
                 }
             }
@@ -699,30 +717,38 @@ private fun SettingsPanel(
         }
 
         ElevatedCard(colors = CardDefaults.elevatedCardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHigh)) {
-            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text("Input Mode", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
 
                 val currentMode by viewModel.inputMode.collectAsState()
 
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    MainViewModel.InputMode.entries.forEach { mode ->
-                        FilterChip(
-                            selected = currentMode == mode,
-                            onClick = { viewModel.updateInputMode(mode) },
-                            label = { Text(mode.name) }
-                        )
+                MainViewModel.InputMode.entries.forEach { mode ->
+                    Surface(
+                        onClick = { viewModel.updateInputMode(mode) },
+                        shape = RoundedCornerShape(12.dp),
+                        color = MaterialTheme.colorScheme.surface,
+                        tonalElevation = 1.dp,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp, vertical = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text(
+                                text = "${mode.name} Mode",
+                                style = MaterialTheme.typography.bodyLarge,
+                                fontWeight = FontWeight.Medium
+                            )
+                            Switch(
+                                checked = currentMode == mode,
+                                onCheckedChange = { if (it) viewModel.updateInputMode(mode) }
+                            )
+                        }
                     }
                 }
-
-                Text(
-                    when (currentMode) {
-                        MainViewModel.InputMode.Touch -> "Native touch gestures for scrolling, tapping, and window management"
-                        MainViewModel.InputMode.Trackpad -> "Relative cursor with tap-to-click, drag, and smooth scrolling"
-                        MainViewModel.InputMode.Mouse -> "Absolute pointer for precise cursor control"
-                    },
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
             }
         }
 

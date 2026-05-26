@@ -99,10 +99,14 @@ impl SeatHandler for AndroidSeatRuntime {
     }
 
     fn cursor_image(&mut self, _seat: &Seat<Self>, image: CursorImageStatus) {
-        self.last_cursor_mode = match image {
-            CursorImageStatus::Hidden => "hidden".to_string(),
-            CursorImageStatus::Named(icon) => format!("named:{:?}", icon),
-            CursorImageStatus::Surface(_) => "surface".to_string(),
+        match &image {
+            CursorImageStatus::Hidden => self.last_cursor_mode = "hidden".to_string(),
+            CursorImageStatus::Named(icon) => self.last_cursor_mode = format!("named:{:?}", icon),
+            CursorImageStatus::Surface(_) => self.last_cursor_mode = "surface".to_string(),
+        }
+        self.cursor_status = match image {
+            CursorImageStatus::Hidden => None,
+            other => Some(other),
         };
     }
 
@@ -111,6 +115,7 @@ impl SeatHandler for AndroidSeatRuntime {
         set_data_device_focus(&self.display_handle, seat, client);
 
         if focused.is_none() {
+            self.cursor_status = None;
             self.last_cursor_mode = "fallback:named:Default".to_string();
         }
     }

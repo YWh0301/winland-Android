@@ -21,6 +21,10 @@ use smithay::desktop::{PopupManager, Space, Window};
 #[cfg(feature = "smithay_android")]
 use smithay::input::keyboard::{ModifiersState, XkbConfig};
 #[cfg(feature = "smithay_android")]
+use smithay::input::pointer::CursorImageStatus;
+#[cfg(feature = "smithay_android")]
+use smithay::input::pointer::CursorImageSurfaceData;
+#[cfg(feature = "smithay_android")]
 use smithay::input::Seat;
 #[cfg(feature = "smithay_android")]
 use smithay::input::SeatState;
@@ -83,6 +87,8 @@ use smithay::wayland::viewporter::ViewporterState;
 use smithay::wayland::virtual_keyboard::VirtualKeyboardManagerState;
 #[cfg(feature = "smithay_android")]
 use smithay::wayland::xdg_activation::XdgActivationState;
+#[cfg(feature = "smithay_android")]
+use smithay::wayland::ext_workspace::{ExtWorkspaceHandler, ExtWorkspaceManagerState};
 #[cfg(feature = "smithay_android")]
 use smithay::xwayland::xwm::ResizeEdge;
 #[cfg(feature = "smithay_android")]
@@ -200,6 +206,7 @@ pub struct AndroidSeatRuntime {
     pub(crate) unmanaged_surfaces: Vec<WlSurface>,
     pub(crate) last_seat_dispatch: String,
     pub(crate) last_focus_decision: String,
+    pub(crate) cursor_status: Option<CursorImageStatus>,
     pub(crate) last_cursor_mode: String,
     pub(crate) android_modifiers: ModifiersState,
     pub(crate) text_input_manager_state: TextInputManagerState,
@@ -224,6 +231,7 @@ pub struct AndroidSeatRuntime {
     pub(crate) gesture_origin: (f32, f32),
     pub(crate) relative_sensitivity: f32,
     pub(crate) physical_size: (i32, i32),
+    pub(crate) screen_size: (i32, i32),
     pub(crate) foreign_toplevel_handles: HashMap<WlSurface, ForeignToplevelHandle>,
     pub(crate) minimized: HashMap<WlSurface, Point<i32, Logical>>,
     pub(crate) maximize_restore: HashMap<WlSurface, Point<i32, Logical>>,
@@ -232,7 +240,11 @@ pub struct AndroidSeatRuntime {
     pub(crate) last_activation_serial: Option<Serial>,
     pub(crate) trackpad_anchor: Option<(f32, f32)>,
     pub(crate) trackpad_moved: bool,
+    pub(crate) trackpad_tap_fingers: Vec<i32>,
+    pub(crate) trackpad_hold_start_ms: u32,
+    pub(crate) trackpad_dragging: bool,
     pub(crate) xkb_keymap: DebugKeymap,
+    pub(crate) ext_workspace_state: ExtWorkspaceManagerState,
 }
 
 #[cfg(feature = "smithay_android")]
@@ -344,6 +356,11 @@ impl AndroidSeatRuntime {
         log::info!("SmithayRuntime: init stage=input_method_manager_state");
         let input_method_manager_state = init_stage("input_method_manager_state", || {
             InputMethodManagerState::new::<Self, _>(display, |_client| true)
+        });
+
+        log::info!("SmithayRuntime: init stage=ext_workspace_state");
+        let ext_workspace_state = init_stage("ext_workspace_state", || {
+            ExtWorkspaceManagerState::new::<Self>(display)
         });
 
         log::info!(
@@ -477,6 +494,7 @@ impl AndroidSeatRuntime {
             unmanaged_surfaces: Vec::new(),
             last_seat_dispatch: "none".to_string(),
             last_focus_decision: "none".to_string(),
+            cursor_status: None,
             last_cursor_mode: "fallback:named:Default".to_string(),
             android_modifiers: ModifiersState::default(),
             text_input_manager_state,
@@ -505,6 +523,7 @@ impl AndroidSeatRuntime {
             popup_grab_surface: None,
             relative_sensitivity: 1.0,
             physical_size: crate::android::command_channel::get_physical_size(),
+            screen_size: (width, height),
             foreign_toplevel_handles: HashMap::new(),
             viewporter_state,
             fractional_scale_state,
@@ -522,7 +541,11 @@ impl AndroidSeatRuntime {
             last_activation_serial: None,
             trackpad_anchor: None,
             trackpad_moved: false,
+            trackpad_tap_fingers: Vec::new(),
+            trackpad_hold_start_ms: 0,
+            trackpad_dragging: false,
             xkb_keymap: DebugKeymap(xkb_keymap),
+            ext_workspace_state,
         })
     }
 
@@ -549,10 +572,21 @@ impl AndroidSeatRuntime {
         );
     }
 
+}
+
+#[cfg(feature = "smithay_android")]
+impl ExtWorkspaceHandler for AndroidSeatRuntime {
+    fn ext_workspace_state(&mut self) -> &mut ExtWorkspaceManagerState {
+        &mut self.ext_workspace_state
+    }
+}
+
+impl AndroidSeatRuntime {
     pub fn update_output_mode(&mut self, width: i32, height: i32) {
         // wl_output.mode always reports surface_size (the full framebuffer).
         // Only the scale changes based on resolution preset chips.
         self.physical_size = crate::android::command_channel::get_physical_size();
+        self.screen_size = (width, height);
         let scale = compute_dpi_scale();
         log::info!(
             "SmithayRuntime: updating output mode to {}x{} scale={} physical={:?}",
@@ -997,6 +1031,95 @@ impl AndroidSeatRuntime {
             }
         }
 
+        // ── Cursor overlay ──
+        let cursor_pos = self.pointer.current_location();
+
+        if let Some(ref cursor_status) = self.cursor_status {
+            match cursor_status {
+                CursorImageStatus::Hidden => {}
+                CursorImageStatus::Named(_) => {
+                    let (cursor_pixels, cw, ch) = fallback_cursor_pixels();
+                    let cx = cursor_pos.x as i32 - 1;
+                    let cy = cursor_pos.y as i32 - 1;
+                    if log_this {
+                        log::info!("  cursor: named fallback at {},{} size {}x{}", cx, cy, cw, ch);
+                    }
+                    render_list.push((cursor_pixels, cx, cy, cw, ch, 1.0));
+                }
+                CursorImageStatus::Surface(wl_surface) => {
+                    if !wl_surface.is_alive() {
+                        if log_this {
+                            log::warn!("  cursor: surface dead, skipping");
+                        }
+                    } else {
+                        let surface_scale = with_states(wl_surface, |states| {
+                            let mut attrs = states.cached_state.get::<SurfaceAttributes>();
+                            attrs.current().buffer_scale.max(1)
+                        }) as f32;
+
+                        let hotspot = with_states(wl_surface, |states| {
+                            states
+                                .data_map
+                                .get::<CursorImageSurfaceData>()
+                                .and_then(|d| d.lock().ok())
+                                .map(|guard| guard.hotspot)
+                                .unwrap_or(Point::from((0, 0)))
+                        });
+
+                        let cx = cursor_pos.x as i32 - hotspot.x;
+                        let cy = cursor_pos.y as i32 - hotspot.y;
+
+                        let buffer_info = Self::get_surface_buffer(wl_surface);
+                        if let Some(buffer) = buffer_info {
+                            if buffer
+                                .data::<smithay::wayland::shm::ShmBufferUserData>()
+                                .is_none()
+                            {
+                                if log_this {
+                                    log::warn!("  cursor: non-SHM buffer");
+                                }
+                            } else {
+                                let _ = with_buffer_contents(&buffer, |ptr, len, info| {
+                                    let slice = unsafe { std::slice::from_raw_parts(ptr, len) };
+                                    let width = info.width as i32;
+                                    let height = info.height as i32;
+                                    let stride = info.stride as usize;
+                                    let offset = info.offset as usize;
+
+                                    let mut pixels =
+                                        Vec::with_capacity((width * height * 4) as usize);
+                                    for y in 0..height {
+                                        let start = offset + (y as usize) * stride;
+                                        let end = start + (width as usize) * 4;
+                                        if end <= slice.len() {
+                                            pixels.extend_from_slice(&slice[start..end]);
+                                        }
+                                    }
+
+                                    if !pixels.is_empty() {
+                                        if log_this {
+                                            log::info!(
+                                                "  cursor: surface {}x{} at {},{} scale={}",
+                                                width,
+                                                height,
+                                                cx,
+                                                cy,
+                                                surface_scale
+                                            );
+                                        }
+                                        render_list
+                                            .push((pixels, cx, cy, width, height, surface_scale));
+                                    }
+                                });
+                            }
+                        } else if log_this {
+                            log::info!("  cursor: no buffer yet");
+                        }
+                    }
+                }
+            }
+        }
+
         if !render_list.is_empty() {
             let _ = self.render_sender.send(render_list);
         }
@@ -1013,6 +1136,48 @@ impl AndroidSeatRuntime {
             Self::send_frame_callback(s);
         }
     }
+}
+
+// ── Fallback cursor bitmap ──────────────────────────────────────────────────
+
+#[cfg(feature = "smithay_android")]
+fn fallback_cursor_pixels() -> (Vec<u8>, i32, i32) {
+    // 16x16 classic arrow cursor: tip at (0,0), white fill with black outline
+    const W: i32 = 16;
+    const H: i32 = 16;
+    let mut pixels = vec![0u8; (W * H * 4) as usize];
+    for y in 0..H {
+        // expanding arrow head (upper triangle: y <= x)
+        // then tapered back edge
+        let rightmost = if y < 12 {
+            y
+        } else if y < 14 {
+            12 - (y - 12) * 2
+        } else if y < 16 {
+            8 - (y - 14) * 2
+        } else {
+            0
+        };
+        for x in 0..=rightmost.min(W - 1) {
+            // outline: outer edge pixels are black, inner are white
+            let is_outline = x == 0
+                || x == rightmost
+                || y == x
+                || (y >= 12 && x == rightmost);
+            let i = ((y * W + x) * 4) as usize;
+            if is_outline || rightmost == 0 || x == y {
+                pixels[i] = 0;
+                pixels[i + 1] = 0;
+                pixels[i + 2] = 0;
+            } else {
+                pixels[i] = 255;
+                pixels[i + 1] = 255;
+                pixels[i + 2] = 255;
+            }
+            pixels[i + 3] = 255;
+        }
+    }
+    (pixels, W, H)
 }
 
 // ── IME notification ─────────────────────────────────────────────────────────

@@ -161,6 +161,7 @@ impl AndroidSeatRuntime {
 
         let changed_mask = keyboard.set_modifier_state(self.android_modifiers);
         if changed_mask != 0 {
+            keyboard.advertise_modifier_state(self);
             self.last_seat_dispatch = format!(
                 "mods_sync reason={} mask={} shift={} ctrl={} alt={} logo={} caps={} num={}",
                 reason,
@@ -353,28 +354,18 @@ impl AndroidSeatRuntime {
 
     fn handle_trackpad_down(&mut self, id: i32, point: &TouchPoint) {
         self.trackpad_anchor = Some((point.x, point.y));
-        self.trackpad_moved = false;
+        if self.active_touch_ids.is_empty() {
+            self.trackpad_moved = false;
+            self.trackpad_dragging = false;
+            self.trackpad_hold_start_ms = engine_timing::now_ms_u32();
+        }
         self.active_touch_ids.insert(id);
-        // Position the pointer at the touch point and establish pointer
-        // enter-focus on the surface beneath the finger. Without enter-focus,
-        // relative_motion() has no surface to target — the cursor stays at
-        // (0,0) and invisible. Required for both Wayland and XWayland.
-        let forced_focus = self.apply_forced_focus_at("trackpad_down", point.x, point.y);
-        let p = self.pointer.clone();
-        let location = engine_timing::point_from_xy(point.x, point.y);
-        let pointer_focus = forced_focus.as_ref().map(|s| {
-            let origin = self.wl_to_window.get(s)
-                .and_then(|w| self.space.element_location(&WindowElement(w.clone())))
-                .map(|loc| (loc.x as f64, loc.y as f64).into())
-                .unwrap_or_else(|| (0.0, 0.0).into());
-            (s.clone(), origin)
-        });
-        p.motion(self, pointer_focus, &PointerMotionEvent {
-            location,
-            serial: SERIAL_COUNTER.next_serial(),
-            time: engine_timing::now_ms_u32(),
-        });
-        p.frame(self);
+        // Do NOT warp the pointer to the touch position. Trackpad should
+        // only send relative motion; the cursor stays where it was.
+        // Just ensure seat/keyboard focus is established on some surface.
+        if self.focused_surface.is_none() {
+            self.apply_forced_focus("trackpad_down");
+        }
         self.last_seat_dispatch = format!("trackpad_down id={} x={:.0} y={:.0}", id, point.x, point.y);
     }
 
@@ -393,59 +384,141 @@ impl AndroidSeatRuntime {
         }
 
         self.trackpad_moved = true;
-
-        // Apply sensitivity and acceleration
-        let speed = (raw_dx * raw_dx + raw_dy * raw_dy).sqrt();
-        let accel = 1.0 + 0.3 * (speed / 200.0).min(3.0);
-        let s = self.relative_sensitivity;
-        let dx = raw_dx * s * accel;
-        let dy = raw_dy * s * accel;
-
         let p = self.pointer.clone();
-        let focus = self.focused_surface.as_ref().map(|s| (s.clone(), (0.0, 0.0).into()));
-        p.relative_motion(self, focus, &RelativeMotionEvent {
+
+        // Long-press detection: if finger held still > 350ms, enter drag mode.
+        // Drag mode keeps left button pressed so subsequent motion acts as
+        // click-and-drag (text selection, window move via titlebar).
+        if !self.trackpad_dragging {
+            let hold_ms = engine_timing::now_ms_u32() - self.trackpad_hold_start_ms;
+            if hold_ms > 350 {
+                self.trackpad_dragging = true;
+                self.trackpad_tap_fingers.clear();
+                p.button(self, &ButtonEvent {
+                    serial: SERIAL_COUNTER.next_serial(),
+                    time: engine_timing::now_ms_u32(),
+                    button: 0x110,
+                    state: ButtonState::Pressed,
+                });
+                p.frame(self);
+                engine_timing::emit_hybrid_trace("Trackpad long-press → drag mode (button held)".to_string());
+                self.last_seat_dispatch = "trackpad_drag_start".into();
+            }
+        }
+
+        // Apply sensitivity and acceleration.
+        // Reduced base sensitivity for precise control.
+        // Base multiplier 1.5x, acceleration adds up to 3x for fast swipes.
+        let speed = (raw_dx * raw_dx + raw_dy * raw_dy).sqrt();
+        let accel = 1.0 + (speed / 150.0).min(2.0);
+        let s = self.relative_sensitivity;
+        let dx = raw_dx * 1.5 * accel * s;
+        let dy = raw_dy * 1.5 * accel * s;
+
+        // Clamp to screen resolution, NOT physical_size (which is mm).
+        let (sw, sh) = self.screen_size;
+        let current = p.current_location();
+        let new_location = Point::<f64, Logical>::from((
+            (current.x + dx as f64).clamp(0.0, sw as f64),
+            (current.y + dy as f64).clamp(0.0, sh as f64),
+        ));
+
+        let pointer_focus = self.focused_surface.as_ref().map(|s| {
+            let origin = self.wl_to_window.get(s)
+                .and_then(|w| self.space.element_location(&WindowElement(w.clone())))
+                .map(|loc| (loc.x as f64, loc.y as f64).into())
+                .unwrap_or_else(|| (0.0, 0.0).into());
+            (s.clone(), origin)
+        });
+
+        p.motion(self, pointer_focus, &PointerMotionEvent {
+            location: new_location,
+            serial: SERIAL_COUNTER.next_serial(),
+            time: engine_timing::now_ms_u32(),
+        });
+
+        // Also send relative_motion for relative pointer protocol clients
+        let cfocus = self.focused_surface.as_ref().map(|s| (s.clone(), (0.0, 0.0).into()));
+        p.relative_motion(self, cfocus, &RelativeMotionEvent {
             delta: (dx as f64, dy as f64).into(),
             delta_unaccel: (dx as f64, dy as f64).into(),
             utime: (engine_timing::now_ms_u32() as u64) * 1000,
         });
+
         p.frame(self);
 
         engine_timing::emit_hybrid_trace(format!(
-            "Trackpad relative_move id={} dx={:.1} dy={:.1} speed={:.0}",
+            "Trackpad {} id={} dx={:.1} dy={:.1} speed={:.0}",
+            if self.trackpad_dragging { "drag_move" } else { "relative_move" },
             id, dx, dy, speed
         ));
-        self.last_seat_dispatch = format!("trackpad_move id={} dx={:.0} dy={:.0}", id, dx, dy);
+        self.last_seat_dispatch = format!("trackpad_{} id={} dx={:.0} dy={:.0}",
+            if self.trackpad_dragging { "drag" } else { "move" }, id, dx, dy);
     }
 
     fn handle_trackpad_up(&mut self, id: i32) {
         let was_moving = self.trackpad_moved;
+        let was_dragging = self.trackpad_dragging;
         self.trackpad_anchor = None;
         self.trackpad_moved = false;
+        self.trackpad_dragging = false;
         self.active_touch_ids.remove(&id);
 
-        if !was_moving {
-            // Tap → left click (press + release)
+        if was_dragging {
+            // Release held button from drag mode
             let p = self.pointer.clone();
-            let click_time = engine_timing::now_ms_u32();
             p.button(self, &ButtonEvent {
                 serial: SERIAL_COUNTER.next_serial(),
-                time: click_time,
-                button: 0x110,
-                state: ButtonState::Pressed,
-            });
-            p.frame(self);
-            p.button(self, &ButtonEvent {
-                serial: SERIAL_COUNTER.next_serial(),
-                time: click_time,
+                time: engine_timing::now_ms_u32(),
                 button: 0x110,
                 state: ButtonState::Released,
             });
             p.frame(self);
-            engine_timing::emit_hybrid_trace(format!(
-                "Trackpad tap→click id={}", id
-            ));
-            self.last_seat_dispatch = format!("trackpad_tap id={}", id);
+            self.trackpad_tap_fingers.clear();
+            engine_timing::emit_hybrid_trace("Trackpad drag→release".to_string());
+            self.last_seat_dispatch = "trackpad_drag_end".into();
+        } else if !was_moving {
+            self.trackpad_tap_fingers.push(id);
+            if self.active_touch_ids.is_empty() {
+                let tap_count = self.trackpad_tap_fingers.len();
+                self.trackpad_tap_fingers.clear();
+                let p = self.pointer.clone();
+
+                // Differentiate quick tap vs long-press:
+                //   Quick tap (< 250ms): tap → left button click
+                //   Long press (>= 400ms): hold+lift → right button click
+                let hold_ms = engine_timing::now_ms_u32() - self.trackpad_hold_start_ms;
+                let is_long_press = tap_count == 1 && hold_ms >= 400;
+
+                let click_time = engine_timing::now_ms_u32();
+                let button = if is_long_press || tap_count >= 2 { 0x111 } else { 0x110 };
+                p.button(self, &ButtonEvent {
+                    serial: SERIAL_COUNTER.next_serial(),
+                    time: click_time,
+                    button,
+                    state: ButtonState::Pressed,
+                });
+                p.frame(self);
+                p.button(self, &ButtonEvent {
+                    serial: SERIAL_COUNTER.next_serial(),
+                    time: click_time,
+                    button,
+                    state: ButtonState::Released,
+                });
+                p.frame(self);
+                if tap_count >= 2 {
+                    engine_timing::emit_hybrid_trace("Trackpad two-finger tap→right-click".to_string());
+                    self.last_seat_dispatch = "trackpad_two_finger_tap".into();
+                } else if is_long_press {
+                    engine_timing::emit_hybrid_trace("Trackpad long-press→right-click".to_string());
+                    self.last_seat_dispatch = "trackpad_long_press".into();
+                } else {
+                    engine_timing::emit_hybrid_trace(format!("Trackpad tap→click id={}", id));
+                    self.last_seat_dispatch = format!("trackpad_tap id={}", id);
+                }
+            }
         } else {
+            self.trackpad_tap_fingers.clear();
             self.last_seat_dispatch = format!("trackpad_up id={}", id);
         }
     }
@@ -638,9 +711,31 @@ impl AndroidSeatRuntime {
         if self.focused_surface.is_none() {
             self.apply_forced_focus("trackpad_rel");
         }
-        let focus = self.focused_surface.clone();
         let p = self.pointer.clone();
-        let cfocus = focus.as_ref().map(|s| (s.clone(), (0.0, 0.0).into()));
+
+        // Clamp to screen resolution, NOT physical_size (which is mm).
+        let (sw, sh) = self.screen_size;
+        let current = p.current_location();
+        let new_location = Point::<f64, Logical>::from((
+            (current.x + dx as f64).clamp(0.0, sw as f64),
+            (current.y + dy as f64).clamp(0.0, sh as f64),
+        ));
+
+        let pointer_focus = self.focused_surface.as_ref().map(|s| {
+            let origin = self.wl_to_window.get(s)
+                .and_then(|w| self.space.element_location(&WindowElement(w.clone())))
+                .map(|loc| (loc.x as f64, loc.y as f64).into())
+                .unwrap_or_else(|| (0.0, 0.0).into());
+            (s.clone(), origin)
+        });
+
+        p.motion(self, pointer_focus, &PointerMotionEvent {
+            location: new_location,
+            serial: SERIAL_COUNTER.next_serial(),
+            time,
+        });
+
+        let cfocus = self.focused_surface.as_ref().map(|s| (s.clone(), (0.0, 0.0).into()));
         p.relative_motion(self, cfocus, &RelativeMotionEvent {
             delta: (dx as f64, dy as f64).into(),
             delta_unaccel: (dx as f64, dy as f64).into(),
@@ -672,6 +767,13 @@ impl AndroidSeatRuntime {
             "Trackpad click state={} btn=0x{:x} t={}", state, button, time
         ));
         self.last_seat_dispatch = format!("trackpad_click state={} btn=0x{:x}", state, button);
+
+        // Two-finger right-click: a finger is held while we inject a right-click press.
+        // Mark trackpad as moved so handle_trackpad_up skips tap-click generation
+        // when that finger lifts, preventing the tap from dismissing the context menu.
+        if state == 1 && button == 0x111 && !self.active_touch_ids.is_empty() {
+            self.trackpad_moved = true;
+        }
     }
 
     pub(crate) fn inject_routed_event(&mut self, event: &RoutedInputEvent) {
@@ -761,6 +863,8 @@ impl AndroidSeatRuntime {
                     RoutedInputEvent::TouchCancel { .. } => {
                         self.trackpad_anchor = None;
                         self.trackpad_moved = false;
+                        self.trackpad_dragging = false;
+                        self.trackpad_tap_fingers.clear();
                         self.active_touch_ids.clear();
                         self.last_seat_dispatch = format!("touch_cancel trackpad focus={}", has_focus);
                     }
@@ -967,16 +1071,31 @@ impl AndroidSeatRuntime {
     }
 
     pub(crate) fn inject_text_commit(&mut self, text: &str) {
+        let modifier_active = self.android_modifiers.ctrl || self.android_modifiers.alt;
         for ch in text.chars() {
+            let ch = if modifier_active {
+                ch.to_ascii_lowercase()
+            } else {
+                ch
+            };
+
             if let Some((scancode, with_shift)) = self.find_keycode_for_char(ch) {
-                if with_shift {
+                let suppress_shift = modifier_active && with_shift;
+
+                log::debug!(
+                    "inject_text_commit: char={:?} U+{:04X} scancode={} shift={} suppress={} ctrl={} alt={}",
+                    ch, ch as u32, scancode, with_shift, suppress_shift,
+                    self.android_modifiers.ctrl, self.android_modifiers.alt,
+                );
+
+                if with_shift && !suppress_shift {
                     self.inject_key_scancode(42 + 8, KeyState::Pressed);
                 }
 
                 self.inject_key_scancode(scancode, KeyState::Pressed);
                 self.inject_key_scancode(scancode, KeyState::Released);
 
-                if with_shift {
+                if with_shift && !suppress_shift {
                     self.inject_key_scancode(42 + 8, KeyState::Released);
                 }
             } else {
