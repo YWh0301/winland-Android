@@ -645,6 +645,31 @@ impl AndroidSeatRuntime {
     }
 
     fn handle_touch_down(&mut self, id: i32, point: &TouchPoint, focus: &Option<WlSurface>) {
+        let now = engine_timing::now_ms_u32();
+
+        // T6: Two-finger tap → right-click
+        // If second finger arrives within 300ms of first, cancel first finger's touch
+        // and emit right-click immediately.
+        if self.active_touch_ids.len() == 1
+            && self.touch_finger1_down_ms > 0
+            && now.wrapping_sub(self.touch_finger1_down_ms) < 300
+        {
+            let t = self.touch.clone();
+            let first_id = *self.active_touch_ids.iter().next().unwrap();
+            t.up(self, &UpEvent {
+                slot: engine_timing::touch_slot_from_id(first_id),
+                serial: SERIAL_COUNTER.next_serial(),
+                time: now,
+            });
+            t.frame(self);
+            self.active_touch_ids.clear();
+            self.active_touch_ids.insert(id);
+            self.touch_finger1_down_ms = 0;
+            self.touch_rightclick_armed = true;
+            self.last_seat_dispatch = format!("two_finger_tap_armed id={}", id);
+            return;
+        }
+
         let touch = self.touch.clone();
         let location = engine_timing::point_from_xy(point.x, point.y);
         let surface_origin: Point<f64, Logical> = focus.as_ref()
@@ -658,12 +683,11 @@ impl AndroidSeatRuntime {
                 .find(|s| s.is_alive()))
             .as_ref()
             .map(|s| (s.clone(), surface_origin));
-        let down_time = engine_timing::now_ms_u32();
         touch.down(self, touch_focus, &DownEvent {
             slot: engine_timing::touch_slot_from_id(id),
             location,
             serial: SERIAL_COUNTER.next_serial(),
-            time: down_time,
+            time: now,
         });
         touch.frame(self);
         engine_timing::emit_hybrid_trace(format!(
@@ -671,6 +695,9 @@ impl AndroidSeatRuntime {
         ));
         self.last_seat_dispatch = format!("touch_down id={} x={:.0} y={:.0}", id, point.x, point.y);
         self.active_touch_ids.insert(id);
+        if self.active_touch_ids.len() == 1 {
+            self.touch_finger1_down_ms = now;
+        }
         if self.active_touch_ids.len() >= 3 {
             self.swipe_cycle_armed = true;
         }
@@ -704,8 +731,35 @@ impl AndroidSeatRuntime {
     }
 
     fn handle_touch_up(&mut self, id: i32) {
+        let now = engine_timing::now_ms_u32();
+
+        // T6: Two-finger tap → emit right-click instead of normal touch up
+        if self.touch_rightclick_armed {
+            self.touch_rightclick_armed = false;
+            let p = self.pointer.clone();
+            let cfocus: Option<(WlSurface, Point<f64, Logical>)> =
+                self.focused_surface.as_ref().map(|s| (s.clone(), (0.0, 0.0).into()));
+            p.button(self, &ButtonEvent {
+                serial: SERIAL_COUNTER.next_serial(),
+                time: now,
+                button: 0x111,
+                state: ButtonState::Pressed,
+            });
+            p.frame(self);
+            p.button(self, &ButtonEvent {
+                serial: SERIAL_COUNTER.next_serial(),
+                time: now,
+                button: 0x111,
+                state: ButtonState::Released,
+            });
+            p.frame(self);
+            self.active_touch_ids.clear();
+            self.last_seat_dispatch = format!("two_finger_right_click id={}", id);
+            return;
+        }
+
         let touch = self.touch.clone();
-        let up_time = engine_timing::now_ms_u32();
+        let up_time = now;
         touch.up(self, &UpEvent {
             slot: engine_timing::touch_slot_from_id(id),
             serial: SERIAL_COUNTER.next_serial(),
@@ -721,7 +775,6 @@ impl AndroidSeatRuntime {
             let (screen_w, screen_h) = self.usable_screen_size();
             let dx = last_x - start_x;
             let dy = last_y - start_y;
-            let now = engine_timing::now_ms_u32();
             let cooldown_ready = self.last_window_cycle_ms == 0
                 || now.wrapping_sub(self.last_window_cycle_ms) >= self.window_cycle_cooldown_ms;
             if self.swipe_cycle_armed && cooldown_ready

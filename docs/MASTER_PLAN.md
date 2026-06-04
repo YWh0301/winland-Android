@@ -5,7 +5,7 @@
 Phase | Focus | Issues | Status
 ------|-------|--------|-------
 1 | Safety & Crashes | R1, W1, W3, S1, S2, S4 | **DONE** (commit 5f33e49)
-2 | XWayland Stability | X3, X4, X6, X7, X8, X10 | Pending
+2 | XWayland Stability | X3(SKIP), X4(SKIP), X6, X7, X8, X10 | **DONE** (commit 0559ec0)
 3 | Touch & Gestures | T2, T3, T4, T5, T6, T7 | Pending
 4 | Trackpad | P1, P2, P3, P4, P5, P6 | Pending
 5 | Window Management | WM1, WM2, WM3, WM4, WM5, WM6, WM7, WM8, WM9 | Pending
