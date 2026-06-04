@@ -4,15 +4,15 @@
 
 Phase | Focus | Issues | Status
 ------|-------|--------|-------
-1 | Safety & Crashes | R1, W1, W3, S1, S2, S4 | **DONE** (commit 5f33e49)
-2 | XWayland Stability | X3(SKIP), X4(SKIP), X6, X7, X8, X10 | **DONE** (commit 0559ec0)
-3 | Touch & Gestures | T2, T3, T4, T5(TODO), T6, T7(TODO) | **DONE** (commit 208f5c2)
-4 | Trackpad | P1, P2, P3, P4, P5, P6 | Pending
-5 | Window Management | WM1, WM2, WM3, WM4, WM5, WM6, WM7, WM8, WM9 | **DONE** (commit 7eb50e6)
-6 | Pointers & Cursor | M2, M3, M4, M5, M6 | **DONE** (commit 4d2a326)
-7 | Wayland Protocols | W2, W5, W6, W7, W8 | Pending
-8 | Rendering | R2, R3, R4, R5, R7 | Pending
-9 | Windows & Shell | N1, N2, N3, N4 | Pending
+1 | Safety & Crashes | R1✅, W1✅, W3✅, S1🔶, S2✅, S4✅ | **6/7 DONE** (commit 5f33e49)
+2 | XWayland Stability | X3⏭️, X4⏭️, X6🔶, X7✅, X8✅, X10✅ | **4/6 DONE** (commits 0559ec0+208f5c2)
+3 | Touch & Gestures | T2🔶, T3✅, T4✅, T5🔶, T6✅, T7🔶 | **3/6 DONE** (commit 208f5c2)
+4 | Trackpad | P1✅, P2✅, P3✅, P4🔶, P5✅, P6✅ | **5/6 DONE** (commit 1dd7ed1)
+5 | Window Management | WM1🔶, WM2✅, WM3🔶, WM4🔶, WM5🔶, WM6🔶, WM7✅, WM8🔶, WM9🔶 | **2/9 DONE** (commit 7eb50e6)
+6 | Pointers & Cursor | M2✅, M3✅, M4🔶, M5🔶, M6🔶 | **2/5 DONE** (commit 4d2a326)
+7 | Wayland Protocols | W2🔶, W5🔶, W6🔶, W7🔶, W8🔶 | **0/5 DONE**
+8 | Rendering | R2✅, R3🔶, R4✅, R5✅, R7🔶 | **3/5 DONE** (already implemented)
+9 | Windows & Shell | N1✅, N2✅, N3✅, N4🔶 | **3/4 DONE** (commit 7752157)
 
 ---
 
