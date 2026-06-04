@@ -416,12 +416,26 @@ impl AndroidSeatRuntime {
         let raw_dy = point.y - last_y;
         self.trackpad_anchor = Some((point.x, point.y));
 
-        if raw_dx.abs() < 0.5 && raw_dy.abs() < 0.5 {
+        // P3: Lowered noise gate from 0.5 to 0.1 for smoother fine motion
+        if raw_dx.abs() < 0.1 && raw_dy.abs() < 0.1 {
             return;
         }
 
         self.trackpad_moved = true;
         let p = self.pointer.clone();
+
+        // P6: Two-finger scroll — if 2+ fingers active, emit scroll instead of pointer motion
+        if self.active_touch_ids.len() >= 2 {
+            let sensitivity = crate::android::command_channel::get_scroll_sensitivity() as f64;
+            let axis = AxisFrame::new(engine_timing::now_ms_u32())
+                .source(AxisSource::Finger)
+                .value(Axis::Horizontal, -(raw_dx as f64) * sensitivity)
+                .value(Axis::Vertical, -(raw_dy as f64) * sensitivity);
+            p.axis(self, axis);
+            p.frame(self);
+            self.last_seat_dispatch = format!("trackpad_scroll id={} dx={:.1} dy={:.1}", id, raw_dx, raw_dy);
+            return;
+        }
 
         // Long-press detection: if finger held still > 350ms, enter drag mode.
         // Drag mode keeps left button pressed so subsequent motion acts as
@@ -443,11 +457,11 @@ impl AndroidSeatRuntime {
             }
         }
 
-        // Apply sensitivity and acceleration.
-        // Reduced base sensitivity for precise control.
-        // Base multiplier 1.5x, acceleration adds up to 3x for fast swipes.
+        // P5: Apply sensitivity and logarithmic acceleration curve.
+        // Base multiplier 1.5x, acceleration uses ln(1 + speed) * 0.6 for
+        // smooth ramp-up: gentle at low speeds, responsive at high speeds.
         let speed = (raw_dx * raw_dx + raw_dy * raw_dy).sqrt();
-        let accel = 1.0 + (speed / 150.0).min(2.0);
+        let accel = 1.0 + (speed * 0.02).ln_1p() * 0.6;
         let s = self.relative_sensitivity;
         let dx = raw_dx * 1.5 * accel * s;
         let dy = raw_dy * 1.5 * accel * s;
