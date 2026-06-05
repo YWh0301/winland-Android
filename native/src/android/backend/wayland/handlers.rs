@@ -41,8 +41,6 @@ use smithay::wayland::buffer::BufferHandler;
 #[cfg(feature = "smithay_android")]
 use smithay::wayland::compositor::{CompositorClientState, CompositorHandler, CompositorState};
 #[cfg(feature = "smithay_android")]
-use smithay::xwayland::XWaylandClientData;
-#[cfg(feature = "smithay_android")]
 use smithay::wayland::foreign_toplevel_list::{
     ForeignToplevelListHandler, ForeignToplevelListState,
 };
@@ -84,10 +82,11 @@ use smithay::wayland::xdg_activation::{
     XdgActivationHandler, XdgActivationState, XdgActivationToken, XdgActivationTokenData,
 };
 #[cfg(feature = "smithay_android")]
+use smithay::xwayland::XWaylandClientData;
+#[cfg(feature = "smithay_android")]
 // تم إزالة FALLBACK_CLIENT_COMPOSITOR_STATE لأنه كان يسبب مشكلة
 
 // ── Smithay handler trait implementations ─────────────────────────────────────
-
 #[cfg(feature = "smithay_android")]
 impl SeatHandler for AndroidSeatRuntime {
     type KeyboardFocus = WlSurface;
@@ -245,7 +244,11 @@ impl CompositorHandler for AndroidSeatRuntime {
 
         self.popups.commit(surface);
 
-        let is_x11 = self.wl_to_window.get(surface).and_then(|w| w.x11_surface()).is_some();
+        let is_x11 = self
+            .wl_to_window
+            .get(surface)
+            .and_then(|w| w.x11_surface())
+            .is_some();
         let is_new_unmanaged = if let Some(window) = self.wl_to_window.get(surface) {
             window.on_commit();
             false
@@ -259,8 +262,11 @@ impl CompositorHandler for AndroidSeatRuntime {
         if is_x11 {
             use smithay::wayland::compositor::with_states;
             with_states(surface, |states| {
-                let mut attrs = states.cached_state.get::<smithay::wayland::compositor::SurfaceAttributes>();
-                log::info!("XWayland commit: surface={:?} has_buffer={}",
+                let mut attrs = states
+                    .cached_state
+                    .get::<smithay::wayland::compositor::SurfaceAttributes>();
+                log::info!(
+                    "XWayland commit: surface={:?} has_buffer={}",
                     surface.id(),
                     attrs.current().buffer.is_some(),
                 );
@@ -629,6 +635,25 @@ impl BufferHandler for AndroidSeatRuntime {
 impl ShmHandler for AndroidSeatRuntime {
     fn shm_state(&self) -> &ShmState {
         &self.shm_state
+    }
+}
+
+#[cfg(feature = "smithay_android")]
+use smithay::wayland::dmabuf::{DmabufGlobal, DmabufHandler, DmabufState, ImportNotifier};
+
+#[cfg(feature = "smithay_android")]
+impl DmabufHandler for AndroidSeatRuntime {
+    fn dmabuf_state(&mut self) -> &mut DmabufState {
+        &mut self.dmabuf_state
+    }
+
+    fn dmabuf_imported(
+        &mut self,
+        _global: &DmabufGlobal,
+        _dmabuf: smithay::backend::allocator::dmabuf::Dmabuf,
+        notifier: ImportNotifier,
+    ) {
+        let _ = notifier.successful::<Self>();
     }
 }
 

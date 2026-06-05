@@ -41,7 +41,7 @@
         <activity
             android:name=".DisplayActivity"
             android:exported="false"
-            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|smallestScreenSize"
+            android:configChanges="keyboard|keyboardHidden|orientation|screenSize|screenLayout|uiMode"
             android:screenOrientation="fullUser"
             android:theme="@style/Theme.WinlandServer" />
 

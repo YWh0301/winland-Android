@@ -1,21 +1,15 @@
 use crate::android::backend::wayland::engine_timing;
 #[cfg(feature = "smithay_android")]
-#[allow(unused_imports)]
-use smithay::desktop::space::SpaceElement;
-#[cfg(feature = "smithay_android")]
-use smithay::wayland::seat::WaylandFocus;
-#[cfg(feature = "smithay_android")]
-use std::collections::{HashMap, HashSet};
-#[cfg(feature = "smithay_android")]
-use std::sync::Arc;
-#[cfg(feature = "smithay_android")]
-use std::sync::atomic::AtomicBool;
-#[cfg(feature = "smithay_android")]
-use smithay::utils::{Serial, SERIAL_COUNTER};
-#[cfg(feature = "smithay_android")]
-use std::sync::Mutex;
+use crate::android::backend::smithay_backend::RenderItem;
 #[cfg(feature = "smithay_android")]
 use crate::android::backend::wayland::shell::WindowElement;
+#[cfg(feature = "smithay_android")]
+use libc;
+#[cfg(feature = "smithay_android")]
+use smithay::backend::allocator::{Format, Fourcc, Modifier};
+#[cfg(feature = "smithay_android")]
+#[allow(unused_imports)]
+use smithay::desktop::space::SpaceElement;
 #[cfg(feature = "smithay_android")]
 use smithay::desktop::{PopupManager, Space, Window};
 #[cfg(feature = "smithay_android")]
@@ -44,9 +38,15 @@ use smithay::utils::Rectangle as SmithayRectangle;
 #[cfg(feature = "smithay_android")]
 use smithay::utils::Transform;
 #[cfg(feature = "smithay_android")]
+use smithay::utils::{Serial, SERIAL_COUNTER};
+#[cfg(feature = "smithay_android")]
 use smithay::wayland::compositor::CompositorState;
 #[cfg(feature = "smithay_android")]
 use smithay::wayland::cursor_shape::CursorShapeManagerState;
+#[cfg(feature = "smithay_android")]
+use smithay::wayland::dmabuf::{DmabufGlobal, DmabufState};
+#[cfg(feature = "smithay_android")]
+use smithay::wayland::ext_workspace::{ExtWorkspaceHandler, ExtWorkspaceManagerState};
 #[cfg(feature = "smithay_android")]
 use smithay::wayland::foreign_toplevel_list::ForeignToplevelHandle;
 #[cfg(feature = "smithay_android")]
@@ -68,6 +68,8 @@ use smithay::wayland::presentation::PresentationState;
 #[cfg(feature = "smithay_android")]
 use smithay::wayland::relative_pointer::RelativePointerManagerState;
 #[cfg(feature = "smithay_android")]
+use smithay::wayland::seat::WaylandFocus;
+#[cfg(feature = "smithay_android")]
 use smithay::wayland::selection::data_device::DataDeviceState;
 #[cfg(feature = "smithay_android")]
 use smithay::wayland::selection::primary_selection::PrimarySelectionState;
@@ -76,9 +78,9 @@ use smithay::wayland::selection::wlr_data_control::DataControlState;
 #[cfg(feature = "smithay_android")]
 use smithay::wayland::shell::wlr_layer::WlrLayerShellState;
 #[cfg(feature = "smithay_android")]
-use smithay::wayland::shell::xdg::XdgShellState;
-#[cfg(feature = "smithay_android")]
 use smithay::wayland::shell::xdg::decoration::XdgDecorationState;
+#[cfg(feature = "smithay_android")]
+use smithay::wayland::shell::xdg::XdgShellState;
 #[cfg(feature = "smithay_android")]
 use smithay::wayland::shm::ShmState;
 #[cfg(feature = "smithay_android")]
@@ -92,13 +94,19 @@ use smithay::wayland::virtual_keyboard::VirtualKeyboardManagerState;
 #[cfg(feature = "smithay_android")]
 use smithay::wayland::xdg_activation::XdgActivationState;
 #[cfg(feature = "smithay_android")]
-use smithay::wayland::ext_workspace::{ExtWorkspaceHandler, ExtWorkspaceManagerState};
+use smithay::wayland::xwayland_shell::XWaylandShellState;
 #[cfg(feature = "smithay_android")]
 use smithay::xwayland::xwm::ResizeEdge;
 #[cfg(feature = "smithay_android")]
 use smithay::xwayland::X11Wm;
 #[cfg(feature = "smithay_android")]
-use smithay::wayland::xwayland_shell::XWaylandShellState;
+use std::collections::{HashMap, HashSet};
+#[cfg(feature = "smithay_android")]
+use std::sync::atomic::AtomicBool;
+#[cfg(feature = "smithay_android")]
+use std::sync::Arc;
+#[cfg(feature = "smithay_android")]
+use std::sync::Mutex;
 #[cfg(feature = "smithay_android")]
 use xkbcommon::xkb::{Context as XkbContext, Keymap as XkbKeymap};
 
@@ -120,7 +128,10 @@ impl WinlandInputMode {
             2 => WinlandInputMode::Trackpad,
             4 => WinlandInputMode::Mouse,
             _ => {
-                log::warn!("WinlandInputMode: invalid bits {}, defaulting to Touch", bits);
+                log::warn!(
+                    "WinlandInputMode: invalid bits {}, defaulting to Touch",
+                    bits
+                );
                 WinlandInputMode::Touch
             }
         }
@@ -177,6 +188,8 @@ impl std::fmt::Debug for DebugKeymap {
 pub struct AndroidSeatRuntime {
     pub(crate) compositor_state: CompositorState,
     pub(crate) shm_state: ShmState,
+    pub(crate) dmabuf_state: DmabufState,
+    pub(crate) dmabuf_global: DmabufGlobal,
     pub(crate) xdg_shell_state: XdgShellState,
     pub(crate) layer_shell_state: WlrLayerShellState,
     pub(crate) _xdg_decoration_state: XdgDecorationState,
@@ -239,8 +252,10 @@ pub struct AndroidSeatRuntime {
     pub(crate) foreign_toplevel_handles: HashMap<WlSurface, ForeignToplevelHandle>,
     pub(crate) minimized: HashMap<WlSurface, Point<i32, Logical>>,
     pub(crate) maximize_restore: HashMap<WlSurface, Point<i32, Logical>>,
-    pub(crate) fullscreen_restore: HashMap<WlSurface, smithay::utils::Rectangle<i32, smithay::utils::Logical>>,
-    pub(crate) render_sender: crossbeam_channel::Sender<Vec<crate::android::backend::smithay_backend::RenderItem>>,
+    pub(crate) fullscreen_restore:
+        HashMap<WlSurface, smithay::utils::Rectangle<i32, smithay::utils::Logical>>,
+    pub(crate) render_sender:
+        crossbeam_channel::Sender<Vec<crate::android::backend::smithay_backend::RenderItem>>,
     pub(crate) clipboard_text: Arc<Mutex<String>>,
     pub(crate) last_activation_serial: Option<Serial>,
     pub(crate) trackpad_anchor: Option<(f32, f32)>,
@@ -263,7 +278,9 @@ impl AndroidSeatRuntime {
         display: &DisplayHandle,
         width: i32,
         height: i32,
-        render_sender: crossbeam_channel::Sender<Vec<crate::android::backend::smithay_backend::RenderItem>>,
+        render_sender: crossbeam_channel::Sender<
+            Vec<crate::android::backend::smithay_backend::RenderItem>,
+        >,
     ) -> Result<Self, String> {
         log::info!("SmithayRuntime: init stage=compositor_state");
         let compositor_state =
@@ -285,6 +302,36 @@ impl AndroidSeatRuntime {
             );
             ShmState::new::<Self>(display, formats)
         });
+        log::info!("SmithayRuntime: init stage=dmabuf_state");
+        let mut dmabuf_state = DmabufState::new();
+        let dmabuf_formats = vec![
+            Format {
+                code: Fourcc::Abgr8888,
+                modifier: Modifier::Linear,
+            },
+            Format {
+                code: Fourcc::Xbgr8888,
+                modifier: Modifier::Linear,
+            },
+            Format {
+                code: Fourcc::Argb8888,
+                modifier: Modifier::Linear,
+            },
+            Format {
+                code: Fourcc::Xrgb8888,
+                modifier: Modifier::Linear,
+            },
+            Format {
+                code: Fourcc::Bgra8888,
+                modifier: Modifier::Linear,
+            },
+            Format {
+                code: Fourcc::Bgrx8888,
+                modifier: Modifier::Linear,
+            },
+        ];
+        let dmabuf_global =
+            dmabuf_state.create_global::<AndroidSeatRuntime>(display, dmabuf_formats);
         log::info!("SmithayRuntime: init stage=layer_shell_state");
         let layer_shell_state = init_stage("layer_shell_state", || {
             WlrLayerShellState::new::<Self>(display)
@@ -460,8 +507,8 @@ impl AndroidSeatRuntime {
 
         let xkb_keymap = XkbKeymap::new_from_names(&context, "evdev", "pc105", "us", "", None, 0)
             .ok_or_else(|| {
-                "failed to load default xkb keymap (tried evdev/pc105/us fallback)".to_string()
-            })?;
+            "failed to load default xkb keymap (tried evdev/pc105/us fallback)".to_string()
+        })?;
 
         let keyboard = Some(
             seat.add_keyboard(XkbConfig::default(), 200, 25)
@@ -485,6 +532,8 @@ impl AndroidSeatRuntime {
         Ok(Self {
             compositor_state,
             shm_state,
+            dmabuf_state,
+            dmabuf_global,
             xdg_shell_state,
             layer_shell_state,
             _xdg_decoration_state: xdg_decoration_state,
@@ -590,7 +639,6 @@ impl AndroidSeatRuntime {
             bottom
         );
     }
-
 }
 
 #[cfg(feature = "smithay_android")]
@@ -609,7 +657,10 @@ impl AndroidSeatRuntime {
         let scale = compute_dpi_scale();
         log::info!(
             "SmithayRuntime: updating output mode to {}x{} scale={} physical={:?}",
-            width, height, scale, self.physical_size
+            width,
+            height,
+            scale,
+            self.physical_size
         );
         let mode = OutputMode {
             size: (width, height).into(),
@@ -828,11 +879,21 @@ impl AndroidSeatRuntime {
         log::info!("SmithayRuntime: focus cleared");
     }
 
-    fn shm_slice<'a>(ptr: *const u8, len: usize, info: &smithay::wayland::shm::BufferData) -> Option<&'a [u8]> {
+    fn shm_slice<'a>(
+        ptr: *const u8,
+        len: usize,
+        info: &smithay::wayland::shm::BufferData,
+    ) -> Option<&'a [u8]> {
         let expected = info.offset as usize + info.stride as usize * info.height as usize;
         if len < expected {
-            log::warn!("SHM buffer corrupted: pool_len={} < expected={} (offset={} stride={} height={})",
-                len, expected, info.offset, info.stride, info.height);
+            log::warn!(
+                "SHM buffer corrupted: pool_len={} < expected={} (offset={} stride={} height={})",
+                len,
+                expected,
+                info.offset,
+                info.stride,
+                info.height
+            );
             return None;
         }
         Some(unsafe { std::slice::from_raw_parts(ptr, len) })
@@ -883,6 +944,63 @@ impl AndroidSeatRuntime {
         });
     }
 
+    fn try_get_dmabuf_render_item(
+        buffer: &WlBuffer,
+        x: i32,
+        y: i32,
+        scale: f32,
+        is_cursor: bool,
+    ) -> Option<RenderItem> {
+        use smithay::backend::allocator::Buffer;
+        use smithay::wayland::dmabuf::get_dmabuf;
+        use std::os::fd::AsRawFd;
+
+        let dmabuf = get_dmabuf(buffer).ok()?;
+        let handle = dmabuf.handles().next()?;
+        let width = dmabuf.width() as usize;
+        let height = dmabuf.height() as usize;
+        let stride = dmabuf.strides().next()? as usize;
+        let offset = dmabuf.offsets().next().unwrap_or(0) as usize;
+        let fd = handle.as_raw_fd();
+        let map_len = offset + stride * height;
+
+        let ptr = unsafe {
+            libc::mmap(std::ptr::null_mut(), map_len,
+                       libc::PROT_READ, libc::MAP_SHARED, fd, 0)
+        };
+        if ptr == libc::MAP_FAILED {
+            log::warn!("dmabuf mmap FAILED fd={} map_len={}", fd, map_len);
+            return None;
+        }
+
+        let mut pixels = Vec::with_capacity(width * height * 4);
+        unsafe {
+            let base = (ptr as *const u8).add(offset);
+            for row in 0..height {
+                let slice = std::slice::from_raw_parts(
+                    base.add(row * stride), width * 4);
+                pixels.extend_from_slice(slice);
+            }
+            libc::munmap(ptr, map_len);
+        }
+
+        if pixels.is_empty() {
+            return None;
+        }
+
+        log::info!("dmabuf mmap OK fd={} {}x{} stride={} offset={} map_len={}", fd, width, height, stride, offset, map_len);
+
+        Some(RenderItem::Shm {
+            pixels,
+            x,
+            y,
+            width: width as i32,
+            height: height as i32,
+            scale,
+            is_cursor,
+        })
+    }
+
     pub(crate) fn render_all(&mut self) {
         if !engine_timing::is_rendering_active() {
             return;
@@ -900,7 +1018,16 @@ impl AndroidSeatRuntime {
         let log_this = frame < 300 || frame % 60 == 0;
 
         if log_this {
-            log::info!("render_all #{}: {} space elements, {} unmanaged surfaces, {}", frame, elem_count, unmanaged_count, self.output.current_mode().map(|m| format!("{}x{}", m.size.w, m.size.h)).unwrap_or("none".into()));
+            log::info!(
+                "render_all #{}: {} space elements, {} unmanaged surfaces, {}",
+                frame,
+                elem_count,
+                unmanaged_count,
+                self.output
+                    .current_mode()
+                    .map(|m| format!("{}x{}", m.size.w, m.size.h))
+                    .unwrap_or("none".into())
+            );
         }
 
         for (idx, elem) in self.space.elements().enumerate() {
@@ -919,15 +1046,21 @@ impl AndroidSeatRuntime {
                 }) as f32;
 
                 if let Some(buffer) = buffer_info {
-                    let is_shm = buffer.data::<smithay::wayland::shm::ShmBufferUserData>().is_some();
+                    let is_shm = buffer
+                        .data::<smithay::wayland::shm::ShmBufferUserData>()
+                        .is_some();
                     if !is_shm {
-                        if log_this {
-                            log::warn!("  space[{}]: non-SHM buffer, cannot read pixels", idx);
+                        if let Some(item) = Self::try_get_dmabuf_render_item(&buffer, loc.x, loc.y, surface_scale, false) {
+                            render_list.push(item);
+                        } else if log_this {
+                            log::warn!("  space[{}]: non-SHM and dmabuf read failed", idx);
                         }
                         continue;
                     }
                     match with_buffer_contents(&buffer, |ptr, len, info| {
-                        let Some(slice) = Self::shm_slice(ptr, len, &info) else { return };
+                        let Some(slice) = Self::shm_slice(ptr, len, &info) else {
+                            return;
+                        };
                         let width = info.width as i32;
                         let height = info.height as i32;
                         let stride = info.stride as usize;
@@ -947,13 +1080,27 @@ impl AndroidSeatRuntime {
                             }
                         }
 
+                        if info.format == smithay::reexports::wayland_server::protocol::wl_shm::Format::Argb8888 {
+                            for px in pixels.chunks_mut(4) { if px[3] == 0 { px[3] = 255; } }
+                        }
                         if log_this {
                             let sample = if pixels.len() >= 8 {
-                                format!("p0=({},{},{},{}) p1=({},{},{},{})",
-                                    pixels[0], pixels[1], pixels[2], pixels[3],
-                                    pixels[4], pixels[5], pixels[6], pixels[7])
+                                format!(
+                                    "p0=({},{},{},{}) p1=({},{},{},{})",
+                                    pixels[0],
+                                    pixels[1],
+                                    pixels[2],
+                                    pixels[3],
+                                    pixels[4],
+                                    pixels[5],
+                                    pixels[6],
+                                    pixels[7]
+                                )
                             } else if pixels.len() >= 4 {
-                                format!("p0=({},{},{},{})", pixels[0], pixels[1], pixels[2], pixels[3])
+                                format!(
+                                    "p0=({},{},{},{})",
+                                    pixels[0], pixels[1], pixels[2], pixels[3]
+                                )
                             } else {
                                 "empty".to_string()
                             };
@@ -964,13 +1111,17 @@ impl AndroidSeatRuntime {
                         }
 
                         if !pixels.is_empty() {
-                            render_list.push((pixels, loc.x, loc.y, width, height, surface_scale));
+                            render_list.push(RenderItem::Shm { pixels, x: loc.x, y: loc.y, width, height, scale: surface_scale, is_cursor: false });
                         }
                     }) {
-                        Ok(_) => {},
+                        Ok(_) => {}
                         Err(e) => {
                             if log_this {
-                                log::warn!("  space[{}]: with_buffer_contents failed: {:?}", idx, e);
+                                log::warn!(
+                                    "  space[{}]: with_buffer_contents failed: {:?}",
+                                    idx,
+                                    e
+                                );
                             }
                         }
                     }
@@ -989,11 +1140,19 @@ impl AndroidSeatRuntime {
                     }) as f32;
 
                     if let Some(buffer) = buffer_info {
-                        if buffer.data::<smithay::wayland::shm::ShmBufferUserData>().is_none() {
+                        if buffer
+                            .data::<smithay::wayland::shm::ShmBufferUserData>()
+                            .is_none()
+                        {
+                            if let Some(item) = Self::try_get_dmabuf_render_item(&buffer, abs_loc.x, abs_loc.y, popup_scale, false) {
+                                render_list.push(item);
+                            }
                             continue;
                         }
                         let _ = with_buffer_contents(&buffer, |ptr, len, info| {
-                            let Some(slice) = Self::shm_slice(ptr, len, &info) else { return };
+                            let Some(slice) = Self::shm_slice(ptr, len, &info) else {
+                                return;
+                            };
                             let width = info.width as i32;
                             let height = info.height as i32;
                             let stride = info.stride as usize;
@@ -1008,8 +1167,12 @@ impl AndroidSeatRuntime {
                                 }
                             }
 
+                            if info.format == smithay::reexports::wayland_server::protocol::wl_shm::Format::Argb8888 {
+                                for px in pixels.chunks_mut(4) { if px[3] == 0 { px[3] = 255; } }
+                            }
+
                             if !pixels.is_empty() {
-                                render_list.push((pixels, abs_loc.x, abs_loc.y, width, height, popup_scale));
+                                render_list.push(RenderItem::Shm { pixels, x: abs_loc.x, y: abs_loc.y, width, height, scale: popup_scale, is_cursor: false });
                             }
                         });
                     }
@@ -1024,7 +1187,10 @@ impl AndroidSeatRuntime {
             });
             if is_cursor {
                 if log_this {
-                    log::info!("  unmanaged[{}]: skip — cursor surface (rendered as overlay)", idx);
+                    log::info!(
+                        "  unmanaged[{}]: skip — cursor surface (rendered as overlay)",
+                        idx
+                    );
                 }
                 continue;
             }
@@ -1037,15 +1203,21 @@ impl AndroidSeatRuntime {
             }) as f32;
 
             if let Some(buffer) = buffer_info {
-                let is_shm = buffer.data::<smithay::wayland::shm::ShmBufferUserData>().is_some();
+                let is_shm = buffer
+                    .data::<smithay::wayland::shm::ShmBufferUserData>()
+                    .is_some();
                 if !is_shm {
-                    if log_this {
-                        log::warn!("  unmanaged[{}]: non-SHM buffer, cannot read pixels", idx);
+                    if let Some(item) = Self::try_get_dmabuf_render_item(&buffer, 0, self.reserved_top, surface_scale, false) {
+                        render_list.push(item);
+                    } else if log_this {
+                        log::warn!("  unmanaged[{}]: non-SHM and dmabuf read failed", idx);
                     }
                     continue;
                 }
                 match with_buffer_contents(&buffer, |ptr, len, info| {
-                    let Some(slice) = Self::shm_slice(ptr, len, &info) else { return };
+                    let Some(slice) = Self::shm_slice(ptr, len, &info) else {
+                        return;
+                    };
                     let width = info.width as i32;
                     let height = info.height as i32;
                     let stride = info.stride as usize;
@@ -1065,13 +1237,28 @@ impl AndroidSeatRuntime {
                         }
                     }
 
+                    if info.format == smithay::reexports::wayland_server::protocol::wl_shm::Format::Argb8888 {
+                        for px in pixels.chunks_mut(4) { if px[3] == 0 { px[3] = 255; } }
+                    }
+
                     if log_this {
                         let sample = if pixels.len() >= 8 {
-                            format!("p0=({},{},{},{}) p1=({},{},{},{})",
-                                pixels[0], pixels[1], pixels[2], pixels[3],
-                                pixels[4], pixels[5], pixels[6], pixels[7])
+                            format!(
+                                "p0=({},{},{},{}) p1=({},{},{},{})",
+                                pixels[0],
+                                pixels[1],
+                                pixels[2],
+                                pixels[3],
+                                pixels[4],
+                                pixels[5],
+                                pixels[6],
+                                pixels[7]
+                            )
                         } else if pixels.len() >= 4 {
-                            format!("p0=({},{},{},{})", pixels[0], pixels[1], pixels[2], pixels[3])
+                            format!(
+                                "p0=({},{},{},{})",
+                                pixels[0], pixels[1], pixels[2], pixels[3]
+                            )
                         } else {
                             "empty".to_string()
                         };
@@ -1082,13 +1269,17 @@ impl AndroidSeatRuntime {
                     }
 
                     if !pixels.is_empty() {
-                        render_list.push((pixels, 0, self.reserved_top, width, height, surface_scale));
+                        render_list.push(RenderItem::Shm { pixels, x: 0, y: self.reserved_top, width, height, scale: surface_scale, is_cursor: false });
                     }
                 }) {
-                    Ok(_) => {},
+                    Ok(_) => {}
                     Err(e) => {
                         if log_this {
-                            log::warn!("  unmanaged[{}]: with_buffer_contents failed: {:?}", idx, e);
+                            log::warn!(
+                                "  unmanaged[{}]: with_buffer_contents failed: {:?}",
+                                idx,
+                                e
+                            );
                         }
                     }
                 }
@@ -1108,9 +1299,15 @@ impl AndroidSeatRuntime {
                     let cx = cursor_pos.x as i32 - 1;
                     let cy = cursor_pos.y as i32 - 1;
                     if log_this {
-                        log::info!("  cursor: named fallback at {},{} size {}x{}", cx, cy, cw, ch);
+                        log::info!(
+                            "  cursor: named fallback at {},{} size {}x{}",
+                            cx,
+                            cy,
+                            cw,
+                            ch
+                        );
                     }
-                    render_list.push((cursor_pixels, cx, cy, cw, ch, 1.0));
+                    render_list.push(RenderItem::Shm { pixels: cursor_pixels, x: cx, y: cy, width: cw, height: ch, scale: 1.0, is_cursor: true });
                 }
                 CursorImageStatus::Surface(wl_surface) => {
                     if !wl_surface.is_alive() {
@@ -1141,12 +1338,17 @@ impl AndroidSeatRuntime {
                                 .data::<smithay::wayland::shm::ShmBufferUserData>()
                                 .is_none()
                             {
-                                if log_this {
-                                    log::warn!("  cursor: non-SHM buffer");
+                                if let Some(item) = Self::try_get_dmabuf_render_item(&buffer, cx, cy, surface_scale, true)
+                                {
+                                    render_list.push(item);
+                                } else if log_this {
+                                    log::warn!("  cursor: non-SHM and dmabuf read failed");
                                 }
                             } else {
                                 let _ = with_buffer_contents(&buffer, |ptr, len, info| {
-                                    let Some(slice) = Self::shm_slice(ptr, len, &info) else { return };
+                                    let Some(slice) = Self::shm_slice(ptr, len, &info) else {
+                                        return;
+                                    };
                                     let width = info.width as i32;
                                     let height = info.height as i32;
                                     let stride = info.stride as usize;
@@ -1173,8 +1375,7 @@ impl AndroidSeatRuntime {
                                                 surface_scale
                                             );
                                         }
-                                        render_list
-                                            .push((pixels, cx, cy, width, height, surface_scale));
+                                        render_list.push(RenderItem::Shm { pixels, x: cx, y: cy, width, height, scale: surface_scale, is_cursor: true });
                                     }
                                 });
                             }
@@ -1226,10 +1427,7 @@ fn fallback_cursor_pixels() -> (Vec<u8>, i32, i32) {
         };
         for x in 0..=rightmost.min(W - 1) {
             // outline: outer edge pixels are black, inner are white
-            let is_outline = x == 0
-                || x == rightmost
-                || y == x
-                || (y >= 12 && x == rightmost);
+            let is_outline = x == 0 || x == rightmost || y == x || (y >= 12 && x == rightmost);
             let i = ((y * W + x) * 4) as usize;
             if is_outline || rightmost == 0 || x == y {
                 pixels[i] = 0;

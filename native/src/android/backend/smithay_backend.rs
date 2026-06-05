@@ -1,7 +1,7 @@
 
 /// Render multiple surfaces in a single GLES pass with proper compositing.
 /// The caller owns the state (on the compositor thread) and passes it by reference.
-pub fn composite_multi(state: &mut AndroidSmithayState, surfaces: &[(Vec<u8>, i32, i32, i32, i32, f32)]) {
+pub fn composite_multi(state: &mut AndroidSmithayState, surfaces: &[RenderItem]) {
     if surfaces.is_empty() {
         return;
     }
@@ -9,7 +9,7 @@ pub fn composite_multi(state: &mut AndroidSmithayState, surfaces: &[(Vec<u8>, i3
         return;
     }
 
-    let (display, surface, context, physical_sw, physical_sh, logical_sw, logical_sh, tex_id, prog_id) = {
+    let (display, surface, context, physical_sw, physical_sh, logical_sw, logical_sh) = {
         let (display, surface, context) = match (state.egl_display, state.egl_surface, state.egl_context) {
             (Some(d), Some(s), Some(c)) => (d, s, c),
             _ => return,
@@ -50,24 +50,7 @@ pub fn composite_multi(state: &mut AndroidSmithayState, surfaces: &[(Vec<u8>, i3
             }
         }
 
-        // Lazy init texture
-        if state.gl_texture.is_none() {
-            unsafe {
-                let mut tex: gl::types::GLuint = 0;
-                gl::GenTextures(1, &mut tex);
-                gl::BindTexture(gl::TEXTURE_2D, tex);
-                gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MIN_FILTER, gl::LINEAR as gl::types::GLint);
-                gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MAG_FILTER, gl::LINEAR as gl::types::GLint);
-                gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_WRAP_S, gl::CLAMP_TO_EDGE as gl::types::GLint);
-                gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_WRAP_T, gl::CLAMP_TO_EDGE as gl::types::GLint);
-                state.gl_texture = Some(tex as u32);
-            }
-        }
-
-        let tex_id = state.gl_texture;
-        let prog_id = state.gl_program;
-
-        (display, surface, context, physical_sw, physical_sh, logical_sw, logical_sh, tex_id, prog_id)
+        (display, surface, context, physical_sw, physical_sh, logical_sw, logical_sh)
     };
 
     unsafe {
@@ -78,48 +61,63 @@ pub fn composite_multi(state: &mut AndroidSmithayState, surfaces: &[(Vec<u8>, i3
         gl::Viewport(0, 0, physical_sw as i32, physical_sh as i32);
         gl::ClearColor(0.12, 0.12, 0.18, 1.0);
         gl::Clear(gl::COLOR_BUFFER_BIT);
-        gl::Enable(gl::BLEND);
-        gl::BlendFunc(gl::SRC_ALPHA, gl::ONE_MINUS_SRC_ALPHA);
         gl::PixelStorei(gl::UNPACK_ALIGNMENT, 1);
 
-        if let (Some(tex), Some(prog)) = (tex_id, prog_id) {
+        if let Some(prog) = state.gl_program {
             gl::UseProgram(prog);
 
-            for (pixels, x, y, w, h, surface_scale) in surfaces {
-                gl::BindTexture(gl::TEXTURE_2D, tex);
-                gl::TexImage2D(
-                    gl::TEXTURE_2D, 0, gl::RGBA as gl::types::GLint,
-                    *w, *h, 0, gl::RGBA, gl::UNSIGNED_BYTE,
-                    pixels.as_ptr() as *const std::ffi::c_void,
-                );
+            for item in surfaces {
+                if item.is_cursor() {
+                    gl::Enable(gl::BLEND);
+                    gl::BlendFunc(gl::SRC_ALPHA, gl::ONE_MINUS_SRC_ALPHA);
+                } else {
+                    gl::Disable(gl::BLEND);
+                }
 
-                // Divide raw buffer dimensions by the surface's own scale factor
-                // (e.g. buffer_scale from wl_surface, or 1.0 for unmanaged surfaces)
-                // to get logical dimensions within the compositor's coordinate space.
-                let logical_w = *w as f32 / *surface_scale;
-                let logical_h = *h as f32 / *surface_scale;
-                let x0 = (*x as f32 / logical_sw) * 2.0 - 1.0;
-                let y0 = 1.0 - (*y as f32 / logical_sh) * 2.0;
-                let x1 = ((*x as f32 + logical_w) / logical_sw) * 2.0 - 1.0;
-                let y1 = 1.0 - ((*y as f32 + logical_h) / logical_sh) * 2.0;
+                let (_item_w, _item_h, item_x, item_y, item_scale) = match *item {
+                    RenderItem::Shm { width, height, x, y, scale, .. } => (width, height, x, y, scale),
+                };
 
-                let verts: [f32; 16] = [
-                    x0, y1, 0.0, 1.0,
-                    x1, y1, 1.0, 1.0,
-                    x0, y0, 0.0, 0.0,
-                    x1, y0, 1.0, 0.0,
-                ];
+                match *item {
+                    RenderItem::Shm { ref pixels, width, height, .. } => {
+                        let mut tex: gl::types::GLuint = 0;
+                        gl::GenTextures(1, &mut tex);
+                        gl::BindTexture(gl::TEXTURE_2D, tex);
+                        gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MIN_FILTER, gl::LINEAR as gl::types::GLint);
+                        gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MAG_FILTER, gl::LINEAR as gl::types::GLint);
+                        gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_WRAP_S, gl::CLAMP_TO_EDGE as gl::types::GLint);
+                        gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_WRAP_T, gl::CLAMP_TO_EDGE as gl::types::GLint);
+                        gl::TexImage2D(
+                            gl::TEXTURE_2D, 0, gl::RGBA as gl::types::GLint,
+                            width, height, 0, gl::RGBA, gl::UNSIGNED_BYTE,
+                            pixels.as_ptr() as *const std::ffi::c_void,
+                        );
 
-                let stride = (4 * std::mem::size_of::<f32>()) as i32;
-                gl::EnableVertexAttribArray(0);
-                gl::VertexAttribPointer(0, 2, gl::FLOAT, gl::FALSE, stride, verts.as_ptr() as *const std::ffi::c_void);
-                gl::EnableVertexAttribArray(1);
-                gl::VertexAttribPointer(1, 2, gl::FLOAT, gl::FALSE, stride, verts.as_ptr().add(2) as *const std::ffi::c_void);
+                        let logical_w = width as f32 / item_scale;
+                        let logical_h = height as f32 / item_scale;
+                        let x0 = (item_x as f32 / logical_sw) * 2.0 - 1.0;
+                        let y0 = 1.0 - (item_y as f32 / logical_sh) * 2.0;
+                        let x1 = ((item_x as f32 + logical_w) / logical_sw) * 2.0 - 1.0;
+                        let y1 = 1.0 - ((item_y as f32 + logical_h) / logical_sh) * 2.0;
 
-                gl::DrawArrays(gl::TRIANGLE_STRIP, 0, 4);
+                        let verts: [f32; 16] = [
+                            x0, y1, 0.0, 1.0,
+                            x1, y1, 1.0, 1.0,
+                            x0, y0, 0.0, 0.0,
+                            x1, y0, 1.0, 0.0,
+                        ];
 
-                gl::DisableVertexAttribArray(0);
-                gl::DisableVertexAttribArray(1);
+                        let stride = (4 * std::mem::size_of::<f32>()) as i32;
+                        gl::EnableVertexAttribArray(0);
+                        gl::VertexAttribPointer(0, 2, gl::FLOAT, gl::FALSE, stride, verts.as_ptr() as *const std::ffi::c_void);
+                        gl::EnableVertexAttribArray(1);
+                        gl::VertexAttribPointer(1, 2, gl::FLOAT, gl::FALSE, stride, verts.as_ptr().add(2) as *const std::ffi::c_void);
+                        gl::DrawArrays(gl::TRIANGLE_STRIP, 0, 4);
+                        gl::DisableVertexAttribArray(0);
+                        gl::DisableVertexAttribArray(1);
+                        gl::DeleteTextures(1, &tex);
+                    }
+                }
             }
 
             gl::UseProgram(0);
@@ -167,6 +165,9 @@ use nix::unistd::ftruncate;
 use std::ffi::CString;
 use std::os::fd::{AsRawFd, OwnedFd};
 
+const EGL_NONE: i32 = 0x3038;
+const EGL_EXTENSIONS: i32 = 0x3055;
+
 #[link(name = "EGL")]
 #[allow(dead_code)]
 extern "C" {
@@ -184,6 +185,7 @@ extern "C" {
     fn eglGetConfigAttrib(display: *mut std::ffi::c_void, config: *mut std::ffi::c_void, attribute: i32, value: *mut i32) -> u32;
     fn eglGetProcAddress(procname: *const std::ffi::c_char) -> *mut std::ffi::c_void;
     fn eglSwapInterval(display: *mut std::ffi::c_void, interval: i32) -> u32;
+    fn eglQueryString(display: *mut std::ffi::c_void, name: i32) -> *const std::ffi::c_char;
 }
 
 #[derive(Debug)]
@@ -207,7 +209,6 @@ pub struct AndroidSmithayState {
     pub egl_config: Option<egl::EGLConfig>,
     pub egl_lib: Option<Library>,
     pub gl_program: Option<u32>,
-    pub gl_texture: Option<u32>,
     pub surface_size: (i32, i32),
     /// Safe-area top inset: camera notch / status bar height in pixels.
     /// Touch Y coordinates must be offset by this before routing.
@@ -227,6 +228,8 @@ pub struct AndroidSmithayState {
     /// Current output scale for NDC coordinate conversion.
     /// Updated whenever scale changes (from Dashboard or surface recreation).
     pub current_scale: f32,
+    /// Whether EGL_EXT_image_dma_buf_import is available on this device
+    pub has_dmabuf_import: bool,
 }
 
 impl AndroidSmithayState {
@@ -239,7 +242,6 @@ impl AndroidSmithayState {
             egl_config: None,
             egl_lib: None,
             gl_program: None,
-            gl_texture: None,
             surface_size: (0, 0),
             y_offset: 0,
             physical_size_mm: (155, 87),
@@ -251,6 +253,7 @@ impl AndroidSmithayState {
             requested_resolution: None,
             requested_scale: None,
             current_scale: 1.0,
+            has_dmabuf_import: false,
         }
     }
 }
@@ -258,10 +261,25 @@ impl AndroidSmithayState {
 // SAFETY: The state is owned by the compositor thread (single-thread access).
 unsafe impl Send for AndroidSmithayState {}
 
-/// (pixels, x, y, w, h, surface_scale) — surface_scale is the client's
-/// buffer_scale (integer) or effective rendering scale, used to convert
-/// raw buffer dimensions to logical for NDC placement.
-pub(crate) type RenderItem = (Vec<u8>, i32, i32, i32, i32, f32);
+pub(crate) enum RenderItem {
+    Shm {
+        pixels: Vec<u8>,
+        x: i32,
+        y: i32,
+        width: i32,
+        height: i32,
+        scale: f32,
+        is_cursor: bool,
+    },
+}
+
+impl RenderItem {
+    pub fn is_cursor(&self) -> bool {
+        match self {
+            RenderItem::Shm { is_cursor, .. } => *is_cursor,
+        }
+    }
+}
 
 /// Drain the render-item channel and composite everything.
 /// The compositor thread owns the receiver; the Wayland thread sends
@@ -313,10 +331,6 @@ fn release_native_window_inner(state: &mut AndroidSmithayState) {
         unsafe {
             let _ = eglMakeCurrent(display, egl::NO_SURFACE, egl::NO_SURFACE, egl::NO_CONTEXT);
 
-            if let Some(tex) = state.gl_texture {
-                gl::DeleteTextures(1, &(tex as u32));
-                state.gl_texture = None;
-            }
             if let Some(prog) = state.gl_program {
                 gl::DeleteProgram(prog);
                 state.gl_program = None;
@@ -411,6 +425,20 @@ pub fn bind_native_window(state: &mut AndroidSmithayState, native_window_ptr: *m
         return Err("EGL: Initialize failed".to_string());
     }
     log::info!("EGL: Initialized version {}.{}", major, minor);
+
+    let egl_extensions = unsafe {
+        let ptr = eglQueryString(display, EGL_EXTENSIONS);
+        if ptr.is_null() {
+            String::new()
+        } else {
+            std::ffi::CStr::from_ptr(ptr).to_string_lossy().to_string()
+        }
+    };
+    let has_dmabuf = egl_extensions.contains("EGL_EXT_image_dma_buf_import");
+    let snippet = if egl_extensions.len() > 200 { &egl_extensions[..200] } else { &egl_extensions[..] };
+    log::info!("EGL has_dmabuf_import={} extensions={}",
+               has_dmabuf, snippet);
+    state.has_dmabuf_import = has_dmabuf;
 
     let mut visual_format = unsafe { ndk_sys::ANativeWindow_getFormat(native_window_ptr) };
     if visual_format <= 0 {

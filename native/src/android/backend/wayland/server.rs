@@ -267,7 +267,7 @@ impl WaylandServer {
                 }
             };
         let handle = event_loop.handle();
-        let wm = match X11Wm::start_wm(handle, &dh, stream, client) {
+        let mut wm = match X11Wm::start_wm(handle, &dh, stream, client) {
              Ok(wm) => wm,
              Err(e) => {
                  log::error!("XWayland: X11Wm::start_wm failed: {}", e);
