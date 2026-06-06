@@ -30,6 +30,7 @@ install_desktop_packages() {
         labwc \
         xwayland \
         dbus-x11 \
+        pulseaudio \
         pulseaudio-utils \
         wlr-randr
 }

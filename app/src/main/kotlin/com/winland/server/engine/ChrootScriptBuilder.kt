@@ -5,8 +5,7 @@ object ChrootScriptBuilder {
     private const val XDG_RUNTIME_DIR_VAL = "/run/user/0"
     private const val PULSE_SOCKET_PATH = "/tmp/pulse-runtime/native"
     private const val PULSE_SERVER_VAL = "unix:/tmp/pulse-runtime/native"
-    private const val AUDIO_BRIDGE_HOST = "127.0.0.1"
-    private const val AUDIO_BRIDGE_PORT = 47130
+
 
     fun buildExtractScript(
         filesDir: String,
@@ -438,24 +437,26 @@ UP_EOF
                 echo "Starting PulseAudio..."
                 mkdir -p /tmp/pulse-runtime
                 chmod 777 /tmp/pulse-runtime 2>/dev/null || true
-                # Expose a real UNIX socket for guest apps, then mirror monitor audio to Android.
-                # Pre-create /var/run/pulse owned by pulse user (system-mode PulseAudio requirement)
-                mkdir -p /var/run/pulse
-                chown pulse:pulse /var/run/pulse 2>/dev/null || chmod 777 /var/run/pulse 2>/dev/null || true
                 rm -rf /tmp/pulse-verbose.log $PULSE_SOCKET_PATH /tmp/pulse.pa
                 mkdir -p /root/.config/pulse
                 cat <<CLIENT_EOF > /root/.config/pulse/client.conf
                 autospawn = no
                 default-server = $PULSE_SERVER_VAL
 CLIENT_EOF
+                mkdir -p /tmp/audio_bridge
+                # Create FIFO and pre-open it with O_RDWR (non-blocking) so
+                # module-pipe-sink doesn't deadlock waiting for a reader.
+                mkfifo -m 666 /tmp/audio_bridge/fifo 2>/dev/null || true
+                exec 3<>/tmp/audio_bridge/fifo
                 cat <<PULSE_EOF > /tmp/pulse.pa
                 load-module module-native-protocol-unix auth-anonymous=1 socket=$PULSE_SOCKET_PATH
-                load-module module-null-sink sink_name=AndroidSink
+                load-module module-pipe-sink sink_name=AndroidSink file=/tmp/audio_bridge/fifo format=s16le channels=2 rate=44100
                 set-default-sink AndroidSink
 PULSE_EOF
                 
                 unset PULSE_SERVER
-                pulseaudio --system -n -F /tmp/pulse.pa --daemonize=yes --realtime=no --disallow-exit --disable-shm=yes --log-target=file:/tmp/pulse-verbose.log -vvvv || true
+                rm -f /run/user/0/pulse/pid 2>/dev/null || true
+                pulseaudio -n -F /tmp/pulse.pa --daemonize --realtime=no --disallow-exit --exit-idle-time=-1 --disable-shm=yes --use-pid-file=false --log-target=file:/tmp/pulse-verbose.log -vvvv || true
                 pulse_wait_ok=0
                 j=0
                 while [ "${'$'}j" -lt 10 ]; do
@@ -473,28 +474,6 @@ PULSE_EOF
                     log_runtime_guest "WARN: pulse socket missing at $PULSE_SOCKET_PATH"
                 fi
                 
-                # High-fidelity Audio Bridge
-                echo "Starting Native Audio Bridge..."
-                (
-                    if ! command -v nc >/dev/null 2>&1; then
-                        echo "nc not found, attempting automatic installation..."
-                        apt-get update && apt-get install -y netcat-openbsd || true
-                    fi
-
-                    if command -v nc >/dev/null 2>&1; then
-                        while true; do
-                            # Check if Android server is listening
-                            if command -v pacat >/dev/null; then
-                                # Direct capture from the default sink monitor and stream to Android
-                                pacat --record --device=AndroidSink.monitor --format=s16le --channels=2 --rate=44100 2>/dev/null | nc $AUDIO_BRIDGE_HOST $AUDIO_BRIDGE_PORT 2>/dev/null
-                            fi
-                            sleep 5
-                        done
-                    else
-                        echo "FATAL: nc still not found after attempt, audio bridge disabled"
-                    fi
-                ) &
-
                 export WAYLAND_DISPLAY=wayland-0
 
                 # Block until host provides native Wayland bridge socket

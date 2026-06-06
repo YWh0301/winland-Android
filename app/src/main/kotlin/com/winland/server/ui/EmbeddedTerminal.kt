@@ -39,6 +39,9 @@ class EmbeddedTerminal(private val context: Context) : TerminalSessionClient, Te
     private var shellPid: Int = -1
     private var currentDistroId: String = "ubuntu"
     var onSessionStateChanged: ((Boolean) -> Unit)? = null
+    var barCtrlActive: Boolean = false
+    var barAltActive: Boolean = false
+    var onBarStateChanged: ((ctrl: Boolean, alt: Boolean) -> Unit)? = null
 
     @android.annotation.SuppressLint("ClickableViewAccessibility")
     fun createView(): TerminalView {
@@ -102,7 +105,9 @@ class EmbeddedTerminal(private val context: Context) : TerminalSessionClient, Te
         currentDistroId = distroId
         val tv = terminalView ?: return
         if (currentSession != null) {
-            // Already running
+            // Re-attach existing session to the (possibly new) view
+            tv.attachSession(currentSession)
+            tv.requestFocus()
             return
         }
 
@@ -485,20 +490,48 @@ fi
         Log.d(TAG, "Copy mode: $copyMode")
     }
 
-    override fun onKeyDown(keyCode: Int, e: KeyEvent, session: TerminalSession): Boolean = false
-    override fun onKeyUp(keyCode: Int, e: KeyEvent): Boolean = false
-
-    override fun onLongPress(event: MotionEvent): Boolean {
-        // Return false to let TerminalView handle it (starts text selection with copy/paste toolbar)
+    override fun onKeyDown(keyCode: Int, e: KeyEvent, session: TerminalSession): Boolean {
+        if (keyCode == KeyEvent.KEYCODE_ENTER || keyCode == KeyEvent.KEYCODE_DEL) {
+            if (barCtrlActive) {
+                barCtrlActive = false
+                onBarStateChanged?.invoke(false, barAltActive)
+            }
+        }
         return false
     }
 
-    override fun readControlKey(): Boolean = false
-    override fun readAltKey(): Boolean = false
+    override fun onKeyUp(keyCode: Int, e: KeyEvent): Boolean {
+        if (barCtrlActive && keyCode != KeyEvent.KEYCODE_CTRL_LEFT && keyCode != KeyEvent.KEYCODE_CTRL_RIGHT) {
+            barCtrlActive = false
+            onBarStateChanged?.invoke(false, barAltActive)
+        }
+        if (barAltActive && keyCode != KeyEvent.KEYCODE_ALT_LEFT && keyCode != KeyEvent.KEYCODE_ALT_RIGHT) {
+            barAltActive = false
+            onBarStateChanged?.invoke(barCtrlActive, false)
+        }
+        return false
+    }
+
+    override fun onLongPress(event: MotionEvent): Boolean {
+        return false
+    }
+
+    override fun readControlKey(): Boolean = barCtrlActive
+    override fun readAltKey(): Boolean = barAltActive
     override fun readShiftKey(): Boolean = false
     override fun readFnKey(): Boolean = false
 
-    override fun onCodePoint(codePoint: Int, ctrlDown: Boolean, session: TerminalSession): Boolean = false
+    override fun onCodePoint(codePoint: Int, ctrlDown: Boolean, session: TerminalSession): Boolean {
+        if (ctrlDown && barCtrlActive) {
+            barCtrlActive = false
+            onBarStateChanged?.invoke(false, barAltActive)
+        }
+        if (barAltActive) {
+            barAltActive = false
+            onBarStateChanged?.invoke(barCtrlActive, false)
+        }
+        return false
+    }
     override fun onEmulatorSet() {
         terminalView?.post { terminalView?.requestFocus() }
     }

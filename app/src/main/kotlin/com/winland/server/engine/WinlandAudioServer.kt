@@ -5,17 +5,20 @@ import android.media.AudioFormat
 import android.media.AudioTrack
 import android.util.Log
 import kotlinx.coroutines.*
-import java.net.InetAddress
-import java.net.ServerSocket
-import java.net.Socket
+import java.io.File
+import java.io.FileInputStream
+import java.io.FileNotFoundException
 
 class WinlandAudioServer {
     private val TAG = "WinlandAudioServer"
-    private var serverSocket: ServerSocket? = null
     private var audioTrack: AudioTrack? = null
     private var isRunning = false
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var serverJob: Job? = null
+
+    companion object {
+        private const val FIFO_PATH = "/data/data/com.winland.server/files/tmp/audio_bridge/fifo"
+    }
 
     fun start() {
         if (isRunning) {
@@ -28,32 +31,41 @@ class WinlandAudioServer {
         serverJob = scope.launch {
             while (isActive && isRunning) {
                 try {
-                    serverSocket = ServerSocket(47130, 50, InetAddress.getByName("127.0.0.1")).apply {
-                        reuseAddress = true
+                    val fifoFile = File(FIFO_PATH)
+                    if (!fifoFile.exists()) {
+                        Log.d(TAG, "Waiting for FIFO $FIFO_PATH...")
+                        delay(1000)
+                        continue
                     }
-                    Log.i(TAG, "Audio Server listening on 127.0.0.1:47130")
-                    while (isRunning) {
-                        val client = serverSocket?.accept()
-                        if (client != null) {
-                            handleClient(client)
+                    Log.i(TAG, "Opening FIFO: $FIFO_PATH")
+                    val inputStream = FileInputStream(fifoFile)
+                    Log.i(TAG, "FIFO opened, audio bridge connected")
+                    val buffer = ByteArray(8192)
+                    try {
+                        while (isRunning) {
+                            val bytesRead = inputStream.read(buffer)
+                            if (bytesRead == -1) break
+                            if (bytesRead > 0) {
+                                audioTrack?.write(buffer, 0, bytesRead)
+                            }
                         }
+                    } catch (e: Exception) {
+                        if (isRunning) {
+                            Log.e(TAG, "FIFO read error", e)
+                        }
+                    } finally {
+                        try { inputStream.close() } catch (_: Exception) {}
                     }
-                } catch (e: java.net.BindException) {
+                    Log.i(TAG, "FIFO read ended, will retry")
+                } catch (e: FileNotFoundException) {
                     if (isRunning) {
-                        Log.w(TAG, "Port 47130 already in use, retrying in 2s...")
-                        delay(2000)
+                        delay(1000)
                     }
                 } catch (e: Exception) {
                     if (isRunning) {
-                        Log.e(TAG, "Audio Server error; retrying in 1s", e)
+                        Log.e(TAG, "Audio server error; retrying in 1s", e)
                         delay(1000)
                     }
-                } finally {
-                    try {
-                        serverSocket?.close()
-                    } catch (_: Exception) {
-                    }
-                    serverSocket = null
                 }
             }
         }
@@ -85,34 +97,12 @@ class WinlandAudioServer {
         audioTrack?.play()
     }
 
-    private suspend fun handleClient(socket: Socket) = withContext(Dispatchers.IO) {
-        Log.i(TAG, "Client connected for audio stream")
-        val inputStream = socket.getInputStream()
-        val buffer = ByteArray(8192) // Doubled buffer for smoother throughput
-        try {
-            while (isRunning && !socket.isClosed) {
-                val bytesRead = inputStream.read(buffer)
-                if (bytesRead == -1) break
-                if (bytesRead > 0) {
-                    audioTrack?.write(buffer, 0, bytesRead)
-                }
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "Audio stream handling error", e)
-        } finally {
-            socket.close()
-            Log.i(TAG, "Audio client disconnected")
-        }
-    }
-
     fun stop() {
         isRunning = false
         serverJob?.cancel()
         serverJob = null
-        try { serverSocket?.close() } catch (_: Exception) {}
         try { audioTrack?.stop() } catch (_: Exception) {}
         try { audioTrack?.release() } catch (_: Exception) {}
-        serverSocket = null
         audioTrack = null
     }
 }

@@ -13,6 +13,7 @@ import android.util.Log
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.compose.foundation.layout.fillMaxSize
@@ -104,6 +105,8 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         traceLifecycle("onCreate") {
             super.onCreate(savedInstanceState)
+
+            enableEdgeToEdge()
 
             if (!NativeBridge.isLoaded()) {
                 showToastSafe("CRITICAL ERROR: Native libraries failed to load. The app cannot function.", longDuration = true)

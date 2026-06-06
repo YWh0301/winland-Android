@@ -6,15 +6,19 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.FormatSize
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
@@ -23,12 +27,21 @@ import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material.icons.filled.Usb
+import androidx.compose.material.icons.filled.DisplaySettings
+import androidx.compose.material.icons.filled.DarkMode
+import androidx.compose.material.icons.filled.PowerSettingsNew
+import androidx.compose.material.icons.filled.TouchApp
+import androidx.compose.material.icons.filled.Laptop
+import androidx.compose.material.icons.filled.Mouse
+import androidx.compose.material.icons.filled.LightMode
+import androidx.compose.material.icons.filled.PhoneAndroid
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CenterAlignedTopAppBar
-import androidx.compose.material3.Divider
+
 import androidx.compose.material3.ElevatedCard
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
@@ -38,6 +51,7 @@ import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
@@ -60,6 +74,7 @@ import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -124,288 +139,175 @@ fun WinlandDashboardScreen(
         else -> null
     }
 
+    val embeddedTerminal = remember { EmbeddedTerminal(appContext) }
+    var ctrlActive by remember { mutableStateOf(false) }
+    var altActive by remember { mutableStateOf(false) }
+    val keyboardController = LocalSoftwareKeyboardController.current
+
+    LaunchedEffect(selectedTab) {
+        keyboardController?.hide()
+    }
+
     Scaffold(
-        topBar = { ProfessionalTopBar(activeOperationText = activeOperationText) },
-        bottomBar = {
-            ModernNavigationBar(
-                selectedTab = selectedTab,
-                onTabSelected = {
-                    haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                    viewModel.setSelectedTab(it)
-                }
-            )
-        }
+        topBar = {
+            if (selectedTab != DashboardTab.Terminal) {
+                ProfessionalTopBar(activeOperationText = activeOperationText)
+            }
+        },
+        contentWindowInsets = WindowInsets.systemBars.only(WindowInsetsSides.Top),
     ) { innerPadding ->
         BoxWithConstraints(modifier = Modifier.fillMaxSize().padding(innerPadding)) {
             val isWide = maxWidth >= 1000.dp
 
-            Box(modifier = Modifier.fillMaxSize()) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(horizontal = 14.dp)
-                ) {
-                    activeOperationText?.let { op ->
-                        ElevatedCard(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(top = 10.dp, bottom = 6.dp),
-                            colors = CardDefaults.elevatedCardColors(containerColor = MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.55f))
-                        ) {
-                            Text(
-                                text = "Active operation: $op. Buttons are locked until completion.",
-                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
-                                color = MaterialTheme.colorScheme.onTertiaryContainer,
-                                style = MaterialTheme.typography.labelLarge
-                            )
-                        }
-                    }
-
-                    Spacer(Modifier.height(6.dp))
-
-                    if (selectedTab == DashboardTab.Home) {
-                        if (isWide) {
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .weight(1f),
-                                horizontalArrangement = Arrangement.spacedBy(12.dp)
-                            ) {
-                                LogPanel(
-                                    displayedLogs = displayedLogs,
-                                    logSearchQuery = logSearchQuery,
-                                    logsPaused = logsPaused,
-                                    onCopyLogs = { clipboard.setText(AnnotatedString(displayedLogs.joinToString("\n"))) },
-                                    onToggleLogsPaused = { viewModel.toggleLogsPaused() },
-                                    onSearchChange = { viewModel.setLogSearchQuery(it) },
-                                    modifier = Modifier.weight(1.4f)
-                                )
-
-                                LazyColumn(
-                                    modifier = Modifier.weight(1f),
-                                    verticalArrangement = Arrangement.spacedBy(12.dp)
-                                ) {
-                                    items(distros) { distro ->
-                                        DistroCard(distro, viewModel, actions)
-                                    }
-                                }
-                            }
-                        } else {
-                            LazyColumn(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .weight(1f),
-                                verticalArrangement = Arrangement.spacedBy(12.dp)
-                            ) {
-                                items(distros) { distro ->
-                                    DistroCard(distro, viewModel, actions)
-                                }
-
-                                item {
-                                    LogPanel(
-                                        displayedLogs = displayedLogs,
-                                        logSearchQuery = logSearchQuery,
-                                        logsPaused = logsPaused,
-                                        onCopyLogs = { clipboard.setText(AnnotatedString(displayedLogs.joinToString("\n"))) },
-                                        onToggleLogsPaused = { viewModel.toggleLogsPaused() },
-                                        onSearchChange = { viewModel.setLogSearchQuery(it) },
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .height(280.dp)
-                                    )
-                                }
-                            }
-                        }
-                    } else if (selectedTab == DashboardTab.Terminal) {
-                        val embeddedTerminal = remember { EmbeddedTerminal(appContext) }
-                        var isKeyboardVisible by remember { mutableStateOf(false) }
-                        var ctrlActive by remember { mutableStateOf(false) }
-                        var altActive by remember { mutableStateOf(false) }
-                        var sessionAlive by remember { mutableStateOf(false) }
-                        var terminalTitle by remember { mutableStateOf("") }
+            Column(modifier = Modifier.fillMaxSize()) {
+                Box(modifier = Modifier.weight(1f)) {
+                    if (selectedTab == DashboardTab.Terminal) {
                         val currentDistroId = activeDistroId ?: "ubuntu"
 
-                        // Wire callbacks on each recomposition (safe – just sets lambdas)
-                        embeddedTerminal.onSessionStateChanged = { alive -> sessionAlive = alive }
-                        embeddedTerminal.onTitleChanged = { title -> terminalTitle = title }
-
-                        DisposableEffect(Unit) {
-                            val activity = appContext as? android.app.Activity
-                            val rootView = activity?.window?.decorView
-                            val listener = rootView?.let { rv ->
-                                android.view.ViewTreeObserver.OnGlobalLayoutListener {
-                                    val rect = android.graphics.Rect()
-                                    rv.getWindowVisibleDisplayFrame(rect)
-                                    val screenHeight = rv.rootView.height
-                                    val keypadHeight = screenHeight - rect.bottom
-                                    isKeyboardVisible = keypadHeight > 200
-                                }.also { l -> rv.viewTreeObserver.addOnGlobalLayoutListener(l) }
-                            }
-                            onDispose {
-                                if (listener != null && rootView != null) {
-                                    rootView.viewTreeObserver.removeOnGlobalLayoutListener(listener)
-                                }
-                                embeddedTerminal.destroy()
+                        LaunchedEffect(Unit) {
+                            embeddedTerminal.onBarStateChanged = { c, a ->
+                                ctrlActive = c
+                                altActive = a
                             }
                         }
 
                         Column(
                             modifier = Modifier
                                 .fillMaxSize()
-                                .padding(horizontal = 8.dp, vertical = 6.dp)
-                                .clip(RoundedCornerShape(14.dp))
                                 .background(Color(0xFF282C34))
+                                .imePadding()
                         ) {
-                            // Terminal header
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .background(Color(0xFF21252B))
-                                    .padding(horizontal = 8.dp, vertical = 4.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.SpaceBetween
-                            ) {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    modifier = Modifier.weight(1f)
-                                ) {
-                                    Box(
-                                        modifier = Modifier
-                                            .size(8.dp)
-                                            .clip(CircleShape)
-                                            .background(
-                                                if (sessionAlive) Color(0xFF98C379)
-                                                else Color(0xFFE06C75)
-                                            )
-                                    )
-                                    Spacer(modifier = Modifier.width(6.dp))
-                                    Text(
-                                        text = if (terminalTitle.isNotEmpty()) terminalTitle else currentDistroId,
-                                        color = Color(0xFF9DA5B4),
-                                        fontSize = 12.sp,
-                                        fontFamily = FontFamily.Monospace,
-                                        fontWeight = FontWeight.Medium,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis
-                                    )
-                                }
-                                // Header controls: font size, restart
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(2.dp)
-                                ) {
-                                    Surface(
-                                        onClick = { embeddedTerminal.decreaseFontSize() },
-                                        shape = RoundedCornerShape(4.dp),
-                                        color = Color(0xFF3E4451),
-                                        modifier = Modifier.size(width = 28.dp, height = 22.dp)
-                                    ) {
-                                        Box(contentAlignment = Alignment.Center) {
-                                            Text(
-                                                text = "A-",
-                                                color = Color(0xFF5C6370),
-                                                fontSize = 10.sp,
-                                                fontFamily = FontFamily.Monospace
-                                            )
-                                        }
-                                    }
-                                    Surface(
-                                        onClick = { embeddedTerminal.increaseFontSize() },
-                                        shape = RoundedCornerShape(4.dp),
-                                        color = Color(0xFF3E4451),
-                                        modifier = Modifier.size(width = 28.dp, height = 22.dp)
-                                    ) {
-                                        Box(contentAlignment = Alignment.Center) {
-                                            Text(
-                                                text = "A+",
-                                                color = Color(0xFF5C6370),
-                                                fontSize = 10.sp,
-                                                fontFamily = FontFamily.Monospace
-                                            )
-                                        }
-                                    }
-                                    IconButton(
-                                        onClick = { embeddedTerminal.restartSession() },
-                                        modifier = Modifier.size(28.dp)
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.Default.Refresh,
-                                            contentDescription = "Restart session",
-                                            tint = Color(0xFF5C6370),
-                                            modifier = Modifier.size(14.dp)
-                                        )
-                                    }
-                                }
-                            }
-
-                            // Terminal view
                             AndroidView(
                                 factory = { _ ->
                                     val view = embeddedTerminal.createView()
                                     embeddedTerminal.startSession(currentDistroId)
                                     view
                                 },
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .weight(1f)
+                                modifier = Modifier.fillMaxWidth().weight(1f)
                             )
+                            TerminalExtraKeysBar(
+                                ctrlActive = ctrlActive,
+                                altActive = altActive,
+                                onCtrlToggle = {
+                                    ctrlActive = !ctrlActive
+                                    embeddedTerminal.barCtrlActive = ctrlActive
+                                },
+                                onAltToggle = {
+                                    altActive = !altActive
+                                    embeddedTerminal.barAltActive = altActive
+                                },
+                                onKey = { key ->
+                                    embeddedTerminal.sendSpecialKey(key)
+                                },
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        }
+                    } else {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(horizontal = 14.dp)
+                        ) {
+                            activeOperationText?.let { op ->
+                                ElevatedCard(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(top = 10.dp, bottom = 6.dp),
+                                    colors = CardDefaults.elevatedCardColors(containerColor = MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.55f))
+                                ) {
+                                    Text(
+                                        text = "Active operation: $op. Buttons are locked until completion.",
+                                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                                        color = MaterialTheme.colorScheme.onTertiaryContainer,
+                                        style = MaterialTheme.typography.labelLarge
+                                    )
+                                }
+                            }
 
-                            // Extra keys bar (shown when soft keyboard is visible)
-                            if (isKeyboardVisible) {
-                                TerminalExtraKeysBar(
-                                    ctrlActive = ctrlActive,
-                                    altActive = altActive,
-                                    onCtrlToggle = { ctrlActive = !ctrlActive },
-                                    onAltToggle = { altActive = !altActive },
-                                    onKey = { key ->
-                                        if (ctrlActive && key.length == 1 && key[0].isLetter()) {
-                                            embeddedTerminal.sendSpecialKey("CTRL+${key[0]}")
-                                            ctrlActive = false
-                                        } else if (altActive && key.length == 1) {
-                                            val esc = byteArrayOf(27)
-                                            embeddedTerminal.currentSession?.write(esc, 0, 1)
-                                            val ch = key.toByteArray()
-                                            embeddedTerminal.currentSession?.write(ch, 0, ch.size)
-                                            altActive = false
-                                        } else {
-                                            embeddedTerminal.sendSpecialKey(key)
+                            Spacer(Modifier.height(6.dp))
+
+                            if (selectedTab == DashboardTab.Home) {
+                                if (isWide) {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth().weight(1f),
+                                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                                    ) {
+                                        LogPanel(
+                                            displayedLogs = displayedLogs,
+                                            logSearchQuery = logSearchQuery,
+                                            logsPaused = logsPaused,
+                                            onCopyLogs = { clipboard.setText(AnnotatedString(displayedLogs.joinToString("\n"))) },
+                                            onToggleLogsPaused = { viewModel.toggleLogsPaused() },
+                                            onSearchChange = { viewModel.setLogSearchQuery(it) },
+                                            modifier = Modifier.weight(1.4f)
+                                        )
+                                        LazyColumn(
+                                            modifier = Modifier.weight(1f),
+                                            verticalArrangement = Arrangement.spacedBy(12.dp)
+                                        ) {
+                                            items(distros) { distro ->
+                                                DistroCard(distro, viewModel, actions)
+                                            }
                                         }
                                     }
+                                } else {
+                                    LazyColumn(
+                                        modifier = Modifier.fillMaxWidth().weight(1f),
+                                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                                    ) {
+                                        items(distros) { distro ->
+                                            DistroCard(distro, viewModel, actions)
+                                        }
+                                        item {
+                                            LogPanel(
+                                                displayedLogs = displayedLogs,
+                                                logSearchQuery = logSearchQuery,
+                                                logsPaused = logsPaused,
+                                                onCopyLogs = { clipboard.setText(AnnotatedString(displayedLogs.joinToString("\n"))) },
+                                                onToggleLogsPaused = { viewModel.toggleLogsPaused() },
+                                                onSearchChange = { viewModel.setLogSearchQuery(it) },
+                                                modifier = Modifier.fillMaxWidth().height(280.dp)
+                                            )
+                                        }
+                                    }
+                                }
+                            } else {
+                                SettingsPanel(
+                                    viewModel = viewModel,
+                                    followSystemTheme = themeSettings.followSystemTheme,
+                                    darkModeEnabled = themeSettings.darkModeEnabled,
+                                    screenPreset = themeSettings.screenPreset,
+                                    onThemeModeChanged = { followSystem, darkEnabled ->
+                                        viewModel.updateThemeMode(followSystem, darkEnabled)
+                                    },
+                                    onResolutionApplied = { resolution ->
+                                        actions.onShowMessage("Resolution updated to $resolution", false)
+                                    },
+                                    onRequestUsb = actions.onRequestUsb,
+                                    onStopChroot = actions.onDistroStop,
+                                    onRestartChroot = actions.onDistroRestart,
+                                    activeDistroId = activeDistroId,
+                                    controlsEnabled = activeUiOperation == null,
+                                    modifier = Modifier.fillMaxWidth().weight(1f)
                                 )
                             }
                         }
-                    } else {
-                        SettingsPanel(
-                            viewModel = viewModel,
-                            followSystemTheme = themeSettings.followSystemTheme,
-                            darkModeEnabled = themeSettings.darkModeEnabled,
-                            screenPreset = themeSettings.screenPreset,
-                            onThemeModeChanged = { followSystem, darkEnabled ->
-                                viewModel.updateThemeMode(followSystem, darkEnabled)
-                            },
-                            onScreenPresetChanged = { preset ->
-                                viewModel.updateScreenPreset(preset)
-                                actions.onShowMessage("Screen preset set to $preset", false)
-                            },
-                            onResolutionApplied = { resolution ->
-                                actions.onShowMessage("Resolution updated to $resolution", false)
-                            },
-                            onRequestUsb = actions.onRequestUsb,
-                            onStopChroot = actions.onDistroStop,
-                            onRestartChroot = actions.onDistroRestart,
-                            activeDistroId = activeDistroId,
-                            controlsEnabled = activeUiOperation == null,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .weight(1f)
-                        )
                     }
                 }
+
+                ModernNavigationBar(
+                    selectedTab = selectedTab,
+                    onTabSelected = {
+                        haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                        viewModel.setSelectedTab(it)
+                    }
+                )
             }
         }
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun LogPanel(
     displayedLogs: List<String>,
@@ -445,27 +347,55 @@ private fun LogPanel(
                 trailingIcon = { Icon(Icons.Default.Search, "Search logs") }
             )
 
-            val verticalScroll = rememberScrollState()
-            val horizontalScroll = rememberScrollState()
-            SelectionContainer {
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(top = 8.dp)
-                        .clip(RoundedCornerShape(14.dp))
-                        .background(MaterialTheme.colorScheme.surface)
-                        .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(14.dp))
-                        .padding(10.dp)
-                        .verticalScroll(verticalScroll)
-                        .horizontalScroll(horizontalScroll)
-                ) {
-                    Text(
-                        text = if (displayedLogs.isEmpty()) "No logs yet" else displayedLogs.joinToString("\n"),
-                        color = MaterialTheme.colorScheme.onSurface,
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = 12.sp,
-                        lineHeight = 16.sp
-                    )
+            val listState = rememberLazyListState()
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(top = 8.dp)
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(MaterialTheme.colorScheme.surface)
+                    .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(14.dp))
+            ) {
+                if (displayedLogs.isEmpty()) {
+                    Box(
+                        modifier = Modifier.fillMaxSize().padding(10.dp),
+                        contentAlignment = Alignment.TopStart
+                    ) {
+                        Text(
+                            text = "No logs yet",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 12.sp
+                        )
+                    }
+                } else {
+                    SelectionContainer {
+                        LazyColumn(
+                            state = listState,
+                            modifier = Modifier.fillMaxSize().padding(horizontal = 10.dp, vertical = 6.dp),
+                            verticalArrangement = Arrangement.spacedBy(0.dp)
+                        ) {
+                            items(
+                                count = displayedLogs.size,
+                                key = { index -> index }
+                            ) { index ->
+                                val line = displayedLogs[index]
+                                Text(
+                                    text = line,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                    fontFamily = FontFamily.Monospace,
+                                    fontSize = 12.sp,
+                                    lineHeight = 16.sp,
+                                    modifier = Modifier.animateItemPlacement()
+                                )
+                            }
+                        }
+                    }
+                    LaunchedEffect(displayedLogs.size) {
+                        if (displayedLogs.isNotEmpty()) {
+                            listState.animateScrollToItem(displayedLogs.size - 1)
+                        }
+                    }
                 }
             }
         }
@@ -479,7 +409,6 @@ private fun SettingsPanel(
     darkModeEnabled: Boolean,
     screenPreset: String,
     onThemeModeChanged: (Boolean, Boolean) -> Unit,
-    onScreenPresetChanged: (String) -> Unit,
     onResolutionApplied: (String) -> Unit,
     onRequestUsb: () -> Unit,
     onStopChroot: () -> Unit,
@@ -488,7 +417,6 @@ private fun SettingsPanel(
     controlsEnabled: Boolean,
     modifier: Modifier = Modifier
 ) {
-    val context = LocalContext.current
     val displayInfo by viewModel.displayInfo.collectAsState()
     var localFollowSystem by remember { mutableStateOf(followSystemTheme) }
     var localDarkMode by remember { mutableStateOf(darkModeEnabled) }
@@ -529,10 +457,17 @@ private fun SettingsPanel(
         )
 
         ElevatedCard(colors = CardDefaults.elevatedCardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHigh)) {
-            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("Display", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Default.DisplaySettings, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text("Display", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                }
+
+                Spacer(Modifier.height(4.dp))
 
                 listOf(resolution1080p, resolution720p).forEach { option ->
+                    val isSelected = selectedResolution.label == option.label
                     Surface(
                         onClick = {
                             selectedResolutionLabel = option.label
@@ -540,29 +475,29 @@ private fun SettingsPanel(
                             onResolutionApplied("${option.label}: scale=${option.scale}")
                         },
                         shape = RoundedCornerShape(12.dp),
-                        color = MaterialTheme.colorScheme.surface,
-                        tonalElevation = 1.dp,
+                        color = if (isSelected) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f) else MaterialTheme.colorScheme.surface,
+                        tonalElevation = if (isSelected) 2.dp else 0.dp,
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(horizontal = 16.dp, vertical = 12.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween
+                                .padding(horizontal = 16.dp, vertical = 14.dp),
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Text(
-                                text = option.label,
-                                style = MaterialTheme.typography.bodyLarge,
-                                fontWeight = FontWeight.Medium
-                            )
-                            Switch(
-                                checked = selectedResolution.label == option.label,
-                                onCheckedChange = {
+                            RadioButton(
+                                selected = isSelected,
+                                onClick = {
                                     selectedResolutionLabel = option.label
                                     NativeBridge.setScaleSafe(option.scale)
                                     onResolutionApplied("${option.label}: scale=${option.scale}")
                                 }
+                            )
+                            Spacer(Modifier.width(12.dp))
+                            Text(
+                                text = option.label,
+                                style = MaterialTheme.typography.bodyLarge,
+                                fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal
                             )
                         }
                     }
@@ -573,7 +508,13 @@ private fun SettingsPanel(
 
         ElevatedCard(colors = CardDefaults.elevatedCardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHigh)) {
             Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("Display Info", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Default.DisplaySettings, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text("Display Info", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                }
+
+                HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp), color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
 
                 Row(modifier = Modifier.fillMaxWidth()) {
                     Text("Window Bound", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
@@ -617,68 +558,66 @@ private fun SettingsPanel(
 
         ElevatedCard(colors = CardDefaults.elevatedCardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHigh)) {
             Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Text("Appearance", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-
-                Row(
-                    modifier = Modifier.horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    FilterChip(
-                        selected = localFollowSystem,
-                        onClick = {
-                            localFollowSystem = true
-                            onThemeModeChanged(true, localDarkMode)
-                        },
-                        label = { Text("System") }
-                    )
-                    FilterChip(
-                        selected = !localFollowSystem && localDarkMode,
-                        onClick = {
-                            localFollowSystem = false
-                            localDarkMode = true
-                            onThemeModeChanged(false, true)
-                        },
-                        label = { Text("Dark") }
-                    )
-                    FilterChip(
-                        selected = !localFollowSystem && !localDarkMode,
-                        onClick = {
-                            localFollowSystem = false
-                            localDarkMode = false
-                            onThemeModeChanged(false, false)
-                        },
-                        label = { Text("Light") }
-                    )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Default.DarkMode, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text("Appearance", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
                 }
 
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            if (localFollowSystem) "Theme follows system" else "Dark Mode",
-                            style = MaterialTheme.typography.bodyLarge
-                        )
-                        Text(
-                            if (localFollowSystem) "Turn off System mode to control manually" else "Reduce eye strain in low light",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                    Switch(
-                        checked = localDarkMode,
-                        enabled = !localFollowSystem,
-                        onCheckedChange = {
-                            localFollowSystem = false
-                            localDarkMode = it
-                            onThemeModeChanged(false, it)
-                        }
+                Text(
+                    text = "Theme",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    data class ThemeOption(val label: String, val icon: androidx.compose.ui.graphics.vector.ImageVector, val onClick: () -> Unit, val isSelected: () -> Boolean)
+                    val themeOptions = listOf(
+                        ThemeOption("System", Icons.Default.PhoneAndroid, { localFollowSystem = true; onThemeModeChanged(true, localDarkMode) }, { localFollowSystem }),
+                        ThemeOption("Dark", Icons.Default.DarkMode, { localFollowSystem = false; localDarkMode = true; onThemeModeChanged(false, true) }, { !localFollowSystem && localDarkMode }),
+                        ThemeOption("Light", Icons.Default.LightMode, { localFollowSystem = false; localDarkMode = false; onThemeModeChanged(false, false) }, { !localFollowSystem && !localDarkMode }),
                     )
+                    themeOptions.forEach { option ->
+                        val isSelected = option.isSelected()
+                        Surface(
+                            onClick = option.onClick,
+                            shape = RoundedCornerShape(12.dp),
+                            color = if (isSelected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(vertical = 12.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally
+                            ) {
+                                Icon(
+                                    imageVector = option.icon,
+                                    contentDescription = option.label,
+                                    tint = if (isSelected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                                Spacer(Modifier.height(4.dp))
+                                Text(
+                                    text = option.label,
+                                    style = MaterialTheme.typography.labelLarge,
+                                    fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal
+                                )
+                            }
+                        }
+                    }
                 }
             }
         }
 
         ElevatedCard(colors = CardDefaults.elevatedCardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHigh)) {
             Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Text("Runtime Controls", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Default.PowerSettingsNew, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text("Runtime Controls", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                }
                 val runtimeReady = activeDistroId != null
                 val buttonsEnabled = controlsEnabled && runtimeReady
 
@@ -717,34 +656,52 @@ private fun SettingsPanel(
         }
 
         ElevatedCard(colors = CardDefaults.elevatedCardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHigh)) {
-            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("Input Mode", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Default.TouchApp, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text("Input Mode", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                }
+
+                Spacer(Modifier.height(4.dp))
 
                 val currentMode by viewModel.inputMode.collectAsState()
 
                 MainViewModel.InputMode.entries.forEach { mode ->
+                    val isSelected = currentMode == mode
                     Surface(
                         onClick = { viewModel.updateInputMode(mode) },
                         shape = RoundedCornerShape(12.dp),
-                        color = MaterialTheme.colorScheme.surface,
-                        tonalElevation = 1.dp,
+                        color = if (isSelected) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f) else MaterialTheme.colorScheme.surface,
+                        tonalElevation = if (isSelected) 2.dp else 0.dp,
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(horizontal = 16.dp, vertical = 12.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween
+                                .padding(horizontal = 16.dp, vertical = 14.dp),
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
+                            RadioButton(
+                                selected = isSelected,
+                                onClick = { viewModel.updateInputMode(mode) }
+                            )
+                            Spacer(Modifier.width(12.dp))
                             Text(
                                 text = "${mode.name} Mode",
                                 style = MaterialTheme.typography.bodyLarge,
-                                fontWeight = FontWeight.Medium
+                                fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Medium
                             )
-                            Switch(
-                                checked = currentMode == mode,
-                                onCheckedChange = { if (it) viewModel.updateInputMode(mode) }
+                            Spacer(Modifier.weight(1f))
+                            Icon(
+                                imageVector = when (mode) {
+                                    MainViewModel.InputMode.Touch -> Icons.Default.TouchApp
+                                    MainViewModel.InputMode.Trackpad -> Icons.Default.Laptop
+                                    MainViewModel.InputMode.Mouse -> Icons.Default.Mouse
+                                },
+                                contentDescription = null,
+                                tint = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(20.dp)
                             )
                         }
                     }
@@ -836,7 +793,7 @@ private fun DistroCard(
             ) {
                 Column(modifier = Modifier.weight(1f)) {
                     Text(distro.name, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-                    Text(distro.description, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(distro.description, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
                 StatusBadge(statusReady)
             }
@@ -966,13 +923,24 @@ private fun StatusBadge(ready: Boolean) {
         color = if (ready) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant,
         shape = RoundedCornerShape(50)
     ) {
-        Text(
-            text = if (ready) "READY" else "PENDING",
-            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
-            style = MaterialTheme.typography.labelSmall,
-            color = if (ready) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
-            fontWeight = FontWeight.Bold
-        )
+        Row(
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(6.dp)
+                    .clip(CircleShape)
+                    .background(if (ready) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f))
+            )
+            Spacer(Modifier.width(6.dp))
+            Text(
+                text = if (ready) "READY" else "PENDING",
+                style = MaterialTheme.typography.labelSmall,
+                color = if (ready) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
+                fontWeight = FontWeight.Bold
+            )
+        }
     }
 }
 
@@ -982,12 +950,18 @@ private fun ProfessionalTopBar(activeOperationText: String?) {
     CenterAlignedTopAppBar(
         title = {
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                Text("Winland", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
+                Text("Winland", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                 if (activeOperationText != null) {
                     Text(
                         activeOperationText,
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.primary
+                    )
+                } else {
+                    Text(
+                        "Linux Desktop Environment",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
             }
@@ -999,11 +973,11 @@ private fun ProfessionalTopBar(activeOperationText: String?) {
 }
 
 @Composable
-private fun ModernNavigationBar(selectedTab: DashboardTab, onTabSelected: (DashboardTab) -> Unit) {
+private fun ModernNavigationBar(selectedTab: DashboardTab, onTabSelected: (DashboardTab) -> Unit, modifier: Modifier = Modifier) {
     Surface(
-        modifier = Modifier
+        modifier = modifier
             .padding(horizontal = 24.dp, vertical = 12.dp)
-            .height(64.dp)
+            .height(72.dp)
             .fillMaxWidth(),
         color = MaterialTheme.colorScheme.surface.copy(alpha = 0.95f),
         shape = CircleShape,
@@ -1015,18 +989,46 @@ private fun ModernNavigationBar(selectedTab: DashboardTab, onTabSelected: (Dashb
             verticalAlignment = Alignment.CenterVertically
         ) {
             val tabs = listOf(
-                DashboardTab.Home to Icons.Default.Home,
-                DashboardTab.Terminal to Icons.Default.Terminal,
-                DashboardTab.Settings to Icons.Default.Settings
+                Triple(DashboardTab.Home, Icons.Default.Home, "Home"),
+                Triple(DashboardTab.Terminal, Icons.Default.Terminal, "Terminal"),
+                Triple(DashboardTab.Settings, Icons.Default.Settings, "Settings")
             )
-            tabs.forEach { (tab, icon) ->
+            tabs.forEach { (tab, icon, label) ->
                 val isSelected = selectedTab == tab
-                IconButton(onClick = { onTabSelected(tab) }) {
-                    Icon(
-                        imageVector = icon,
-                        contentDescription = null,
-                        tint = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(if (isSelected) 28.dp else 24.dp)
+                val color by animateColorAsState(
+                    targetValue = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                    label = "tabColor"
+                )
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(16.dp))
+                        .then(
+                            Modifier
+                                .background(
+                                    if (isSelected) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f)
+                                    else MaterialTheme.colorScheme.surface.copy(alpha = 0f)
+                                )
+                                .padding(horizontal = 16.dp, vertical = 6.dp)
+                        )
+                ) {
+                    IconButton(
+                        onClick = { onTabSelected(tab) },
+                        modifier = Modifier.size(28.dp)
+                    ) {
+                        Icon(
+                            imageVector = icon,
+                            contentDescription = label,
+                            tint = color,
+                            modifier = Modifier.size(if (isSelected) 24.dp else 22.dp)
+                        )
+                    }
+                    Text(
+                        text = label,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = color,
+                        fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
+                        fontSize = 10.sp
                     )
                 }
             }
@@ -1040,16 +1042,18 @@ private fun TerminalExtraKeysBar(
     altActive: Boolean,
     onCtrlToggle: () -> Unit,
     onAltToggle: () -> Unit,
-    onKey: (String) -> Unit
+    onKey: (String) -> Unit,
+    modifier: Modifier = Modifier
 ) {
     val scrollState = rememberScrollState()
     Row(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
-            .background(Color(0xFF21252B))
+            .background(Color(0xFF1A1D23))
             .horizontalScroll(scrollState)
-            .padding(horizontal = 4.dp, vertical = 4.dp),
-        horizontalArrangement = Arrangement.spacedBy(3.dp)
+            .padding(horizontal = 6.dp, vertical = 5.dp),
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+        verticalAlignment = Alignment.CenterVertically
     ) {
         ExtraKeyButton("ESC", onKey)
         ExtraKeyToggle("CTL", ctrlActive, onCtrlToggle)
@@ -1077,22 +1081,26 @@ private fun ExtraKeyButton(
     onKey: (String) -> Unit = {},
     onClick: (() -> Unit)? = null
 ) {
+    val haptics = LocalHapticFeedback.current
     Surface(
-        onClick = { onClick?.invoke() ?: onKey(label) },
-        shape = RoundedCornerShape(4.dp),
+        onClick = {
+            haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+            onClick?.invoke() ?: onKey(label)
+        },
+        shape = RoundedCornerShape(8.dp),
         color = Color(0xFF3E4451),
-        modifier = Modifier.height(30.dp)
+        modifier = Modifier.height(40.dp)
     ) {
         Box(
             contentAlignment = Alignment.Center,
-            modifier = Modifier.padding(horizontal = 8.dp)
+            modifier = Modifier.padding(horizontal = 12.dp)
         ) {
             Text(
                 text = label,
                 color = Color(0xFFABB2BF),
-                fontSize = 11.sp,
+                fontSize = 13.sp,
                 fontFamily = FontFamily.Monospace,
-                fontWeight = FontWeight.Medium
+                fontWeight = FontWeight.SemiBold
             )
         }
     }
@@ -1104,20 +1112,29 @@ private fun ExtraKeyToggle(
     active: Boolean,
     onClick: () -> Unit
 ) {
+    val haptics = LocalHapticFeedback.current
+    val bgColor by animateColorAsState(
+        targetValue = if (active) Color(0xFF61AFEF) else Color(0xFF3E4451),
+        label = "toggleBg"
+    )
+    val textColor = if (active) Color(0xFF282C34) else Color(0xFFABB2BF)
     Surface(
-        onClick = onClick,
-        shape = RoundedCornerShape(4.dp),
-        color = if (active) Color(0xFF61AFEF) else Color(0xFF3E4451),
-        modifier = Modifier.height(30.dp)
+        onClick = {
+            haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+            onClick()
+        },
+        shape = RoundedCornerShape(8.dp),
+        color = bgColor,
+        modifier = Modifier.height(40.dp)
     ) {
         Box(
             contentAlignment = Alignment.Center,
-            modifier = Modifier.padding(horizontal = 8.dp)
+            modifier = Modifier.padding(horizontal = 12.dp)
         ) {
             Text(
                 text = label,
-                color = if (active) Color(0xFF282C34) else Color(0xFFABB2BF),
-                fontSize = 11.sp,
+                color = textColor,
+                fontSize = 13.sp,
                 fontFamily = FontFamily.Monospace,
                 fontWeight = FontWeight.Bold
             )
