@@ -32,17 +32,30 @@ fn is_wayland_socket_published(socket_dir: &Path, socket_name: &str) -> bool {
     }
 }
 
-pub fn spawn() -> Result<(), String> {
+pub fn spawn(distro_id: &str) -> Result<(), String> {
+    let app_context = crate::android::utils::context::get_application_context();
+    let data_dir = app_context.data_dir.to_string_lossy().to_string();
+    let socket_dir = app_context.data_dir.join("tmp");
+
+    // Always update XKB config for current distro, even if compositor is already running.
+    crate::android::backend::wayland::smithay_runtime::configure_xkb(&data_dir, distro_id);
+
     if !RUNTIME.load(Ordering::SeqCst).is_null() {
-        log::info!("Compositor: runtime already running");
-        return Ok(());
+        let runtime_ptr = RUNTIME.load(Ordering::SeqCst);
+        let runtime = unsafe { &*runtime_ptr };
+        if runtime.worker.is_finished() {
+            log::warn!("Compositor: thread is dead, clearing stale runtime pointer");
+            let old = RUNTIME.swap(ptr::null_mut(), Ordering::SeqCst);
+            unsafe { drop(Box::from_raw(old)) };
+        } else {
+            log::info!("Compositor: runtime already running (xkb updated for distro={})", distro_id);
+            return Ok(());
+        }
     }
 
     let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded::<JniCommand>();
     set_command_tx(cmd_tx);
 
-    let app_context = crate::android::utils::context::get_application_context();
-    let socket_dir = app_context.data_dir.join("tmp");
     crate::android::backend::wayland::bind::bind_socket(socket_dir.to_string_lossy().as_ref());
 
     let running = Arc::new(AtomicBool::new(true));

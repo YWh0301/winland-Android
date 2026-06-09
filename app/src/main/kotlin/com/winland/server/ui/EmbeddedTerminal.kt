@@ -29,16 +29,17 @@ class EmbeddedTerminal(private val context: Context) : TerminalSessionClient, Te
 
     var terminalView: TerminalView? = null
         private set
-    var currentSession: TerminalSession? = null
-        private set
     private var currentFontSize = 14
     private var sessionFinishedHandled = false
     private var restartCount = 0
     private val MAX_RESTARTS = 2
     private var scaleAccumulator = 0f
     private var shellPid: Int = -1
-    private var currentDistroId: String = "ubuntu"
+    private var terminalDistroId: String = "ubuntu"
+    private val sessions: MutableMap<String, TerminalSession?> = mutableMapOf()
+    private var ptmxFixAttempted = false
     var onSessionStateChanged: ((Boolean) -> Unit)? = null
+    val currentDistroId: String get() = terminalDistroId
     var barCtrlActive: Boolean = false
     var barAltActive: Boolean = false
     var onBarStateChanged: ((ctrl: Boolean, alt: Boolean) -> Unit)? = null
@@ -101,23 +102,37 @@ class EmbeddedTerminal(private val context: Context) : TerminalSessionClient, Te
         com.termux.terminal.TerminalColors.COLOR_SCHEME.updateWith(props)
     }
 
-    fun startSession(distroId: String = "ubuntu") {
-        currentDistroId = distroId
+    private fun getCurrentSession(): TerminalSession? = sessions[terminalDistroId]
+
+    private fun attachCurrentSession() {
         val tv = terminalView ?: return
-        if (currentSession != null) {
-            // Re-attach existing session to the (possibly new) view
-            tv.attachSession(currentSession)
+        val session = getCurrentSession()
+        if (session != null) {
+            tv.attachSession(session)
             tv.requestFocus()
+            onSessionStateChanged?.invoke(true)
+        }
+    }
+
+    fun startSession(distroId: String? = null) {
+        val id = distroId ?: terminalDistroId
+        terminalDistroId = id
+        val tv = terminalView ?: return
+
+        val existing = sessions[id]
+        if (existing != null && existing.isRunning()) {
+            tv.attachSession(existing)
+            tv.requestFocus()
+            onSessionStateChanged?.invoke(true)
             return
         }
 
-        // Use ACTUAL path for local file operations to bypass sandbox/symlink issues
+        ensurePtmxAccess()
+
         val physicalFilesDir = context.filesDir.absolutePath
-        // Use UNIFIED path for strings being passed into chroot/shell scripts
         val unifiedFilesDir = context.getUnifiedFilesDir()
-        
-        val rootfsDir = context.getUnifiedRootfsDir(distroId)
-        val status = ChrootInstaller.getChrootStatus(context, distroId)
+        val rootfsDir = context.getUnifiedRootfsDir(id)
+        val status = ChrootInstaller.getChrootStatus(context, id)
 
         val shellBinary = findShellBinary()
         val isSu = shellBinary.endsWith("/su")
@@ -127,8 +142,12 @@ class EmbeddedTerminal(private val context: Context) : TerminalSessionClient, Te
         val cwd: String
 
         if (status.ready && isSu) {
-            val chrootScriptFile = java.io.File(physicalFilesDir, "chroot-dashboard_$distroId.sh")
-            chrootScriptFile.writeText(buildChrootCommand(rootfsDir, unifiedFilesDir, distroId))
+            val chrootScriptFile = java.io.File(physicalFilesDir, "chroot-dashboard_$id.sh")
+            val chrootCommand = when (id) {
+                "kali" -> buildChrootCommandKali(rootfsDir, unifiedFilesDir)
+                else -> buildChrootCommandUbuntu(rootfsDir, unifiedFilesDir)
+            }
+            chrootScriptFile.writeText(chrootCommand)
             chrootScriptFile.setExecutable(true, false)
             cwd = "/"
             args = arrayOf("su", "-c", "sh ${chrootScriptFile.absolutePath}")
@@ -149,7 +168,7 @@ class EmbeddedTerminal(private val context: Context) : TerminalSessionClient, Te
 
         try {
             val session = TerminalSession(shellBinary, cwd, args, env, null, this)
-            currentSession = session
+            sessions[id] = session
             tv.attachSession(session)
             tv.requestFocus()
             onSessionStateChanged?.invoke(true)
@@ -163,20 +182,35 @@ class EmbeddedTerminal(private val context: Context) : TerminalSessionClient, Te
         }
     }
 
+    private fun ensurePtmxAccess() {
+        if (ptmxFixAttempted) return
+        ptmxFixAttempted = true
+        try {
+            val proc = Runtime.getRuntime().exec(arrayOf("su", "-c", "chmod 666 /dev/ptmx && chmod 666 /dev/pts/ptmx 2>/dev/null; ls -laZ /dev/ptmx"))
+            val code = proc.waitFor()
+            val out = proc.inputStream.bufferedReader().readText().trim()
+            val err = proc.errorStream.bufferedReader().readText().trim()
+            Log.i(TAG, "/dev/ptmx fix: exit=$code, out=[$out], err=[$err]")
+        } catch (e: Exception) {
+            Log.w(TAG, "EnsurePtmxAccess failed", e)
+        }
+    }
+
     fun destroy() {
-        currentSession?.finishIfRunning()
-        currentSession = null
+        sessions.values.forEach { it?.finishIfRunning() }
+        sessions.clear()
         terminalView = null
     }
 
     fun restartSession() {
         sessionFinishedHandled = true
-        currentSession?.finishIfRunning()
-        currentSession = null
+        val old = sessions[terminalDistroId]
+        old?.finishIfRunning()
+        sessions[terminalDistroId] = null
         restartCount = 0
         sessionFinishedHandled = false
         onSessionStateChanged?.invoke(false)
-        terminalView?.post { startSession(currentDistroId) }
+        terminalView?.post { startSession(terminalDistroId) }
     }
 
     fun increaseFontSize() {
@@ -196,7 +230,7 @@ class EmbeddedTerminal(private val context: Context) : TerminalSessionClient, Te
     }
 
     fun sendSpecialKey(key: String) {
-        val session = currentSession ?: return
+        val session = getCurrentSession() ?: return
         when (key) {
             "ESC" -> session.write(byteArrayOf(27), 0, 1)
             "TAB" -> session.write(byteArrayOf(9), 0, 1)
@@ -239,7 +273,7 @@ class EmbeddedTerminal(private val context: Context) : TerminalSessionClient, Te
         val args = if (isSu) arrayOf<String>() else arrayOf<String>()
         try {
             val session = TerminalSession(shellBinary, "/", args, env, null, this)
-            currentSession = session
+            sessions[terminalDistroId] = session
             tv.attachSession(session)
             tv.requestFocus()
         } catch (e: Exception) {
@@ -272,7 +306,7 @@ class EmbeddedTerminal(private val context: Context) : TerminalSessionClient, Te
         return "/system/bin/sh"
     }
 
-    private fun buildChrootCommand(rootfsDir: String, filesDir: String, distroId: String): String {
+    private fun buildChrootCommandUbuntu(rootfsDir: String, filesDir: String): String {
         val tmpDir = "$filesDir/tmp"
         return """#!/bin/sh
 ROOTFS_DIR="$rootfsDir"
@@ -315,7 +349,6 @@ chmod 1777 "${'$'}ROOTFS_DIR/dev/shm" 2>/dev/null || true
 mkdir -p "${'$'}ROOTFS_DIR${'$'}FILES_DIR/tmp" 2>/dev/null
 chmod 700 "${'$'}ROOTFS_DIR${'$'}FILES_DIR/tmp" 2>/dev/null || true
 
-# --- Socket accessibility fix (chroot needs world access) ---
 SOCK="${'$'}TMP_DIR/wayland-0"
 LOGF="${'$'}TMP_DIR/winland-socket-fix.log"
 if [ -S "${'$'}SOCK" ]; then
@@ -325,7 +358,6 @@ if [ -S "${'$'}SOCK" ]; then
 else
   echo "[fix] Socket not found: ${'$'}SOCK" >> "${'$'}LOGF"
 fi
-# --- End fix ---
 
 export HOME=/root
 export USER=root
@@ -334,7 +366,82 @@ export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 export TERM=xterm-256color
 export COLORTERM=truecolor
 export LANG=en_US.UTF-8
-export PS1='root@winland_$distroId:\w# '
+export PS1='\[\e[32m\]root@winland_ubuntu:\w# \[\e[0m\]'
+export XDG_RUNTIME_DIR=${'$'}FILES_DIR/tmp
+export WAYLAND_DISPLAY=wayland-0
+if [ -f "${'$'}ROOTFS_DIR/bin/bash" ]; then
+    exec chroot "${'$'}ROOTFS_DIR" /bin/bash --login
+elif [ -f "${'$'}ROOTFS_DIR/bin/sh" ]; then
+    exec chroot "${'$'}ROOTFS_DIR" /bin/sh -l
+else
+    echo "[!] Chroot failed: no shell found in ${'$'}ROOTFS_DIR"
+    echo "[!] Falling back to Android root shell"
+    exec /system/bin/sh
+fi
+"""
+    }
+
+    private fun buildChrootCommandKali(rootfsDir: String, filesDir: String): String {
+        val tmpDir = "$filesDir/tmp"
+        return """#!/bin/sh
+ROOTFS_DIR="$rootfsDir"
+TMP_DIR="$tmpDir"
+FILES_DIR="$filesDir"
+EXT_STORAGE=/storage/emulated/0
+
+unmount_safe() {
+    umount "${'$'}1" 2>/dev/null || umount -l "${'$'}1" 2>/dev/null || true
+}
+
+[ ! -d "${'$'}ROOTFS_DIR" ] && exec /system/bin/sh
+
+mkdir -p "${'$'}ROOTFS_DIR/proc" "${'$'}ROOTFS_DIR/sys" "${'$'}ROOTFS_DIR/dev" "${'$'}ROOTFS_DIR/dev/pts" "${'$'}ROOTFS_DIR/tmp" "${'$'}ROOTFS_DIR/dev/shm" "${'$'}ROOTFS_DIR/external_storage" 2>/dev/null
+mkdir -p "${'$'}TMP_DIR" 2>/dev/null
+
+mount -o remount,dev,suid /data 2>/dev/null || true
+
+unmount_safe "${'$'}ROOTFS_DIR/dev/shm"
+unmount_safe "${'$'}ROOTFS_DIR/external_storage"
+unmount_safe "${'$'}ROOTFS_DIR/tmp"
+unmount_safe "${'$'}ROOTFS_DIR/dev/pts"
+unmount_safe "${'$'}ROOTFS_DIR/dev"
+unmount_safe "${'$'}ROOTFS_DIR/proc"
+unmount_safe "${'$'}ROOTFS_DIR/sys"
+
+mount -t proc proc "${'$'}ROOTFS_DIR/proc" 2>/dev/null || true
+mount -t sysfs sys "${'$'}ROOTFS_DIR/sys" 2>/dev/null || true
+mount -o bind /dev "${'$'}ROOTFS_DIR/dev" 2>/dev/null || true
+mount -o bind /dev/pts "${'$'}ROOTFS_DIR/dev/pts" 2>/dev/null || true
+mount -o bind "${'$'}EXT_STORAGE" "${'$'}ROOTFS_DIR/external_storage" 2>/dev/null || true
+mount -t tmpfs -o nosuid,nodev tmpfs "${'$'}ROOTFS_DIR/dev/shm" 2>/dev/null || true
+mount -o bind "${'$'}TMP_DIR" "${'$'}ROOTFS_DIR/tmp" 2>/dev/null || true
+mount -o bind "${'$'}TMP_DIR" "${'$'}ROOTFS_DIR${'$'}FILES_DIR/tmp" 2>/dev/null || true
+
+chmod 1777 "${'$'}ROOTFS_DIR/tmp" 2>/dev/null || true
+chmod 1777 "${'$'}TMP_DIR" 2>/dev/null || true
+chmod 1777 "${'$'}ROOTFS_DIR/dev/shm" 2>/dev/null || true
+
+mkdir -p "${'$'}ROOTFS_DIR${'$'}FILES_DIR/tmp" 2>/dev/null
+chmod 700 "${'$'}ROOTFS_DIR${'$'}FILES_DIR/tmp" 2>/dev/null || true
+
+SOCK="${'$'}TMP_DIR/wayland-0"
+LOGF="${'$'}TMP_DIR/winland-socket-fix.log"
+if [ -S "${'$'}SOCK" ]; then
+  echo "[fix] Found socket: ${'$'}SOCK" >> "${'$'}LOGF"
+  chmod 777 "${'$'}SOCK" 2>>"${'$'}LOGF" || echo "[fix] chmod failed: $?" >> "${'$'}LOGF"
+  ls -lZ "${'$'}SOCK" >> "${'$'}LOGF"
+else
+  echo "[fix] Socket not found: ${'$'}SOCK" >> "${'$'}LOGF"
+fi
+
+export HOME=/root
+export USER=root
+export LOGNAME=root
+export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+export TERM=xterm-256color
+export COLORTERM=truecolor
+export LANG=en_US.UTF-8
+export PS1='\[\e[31m\]root@winland_kali:\w# \[\e[0m\]'
 export XDG_RUNTIME_DIR=${'$'}FILES_DIR/tmp
 export WAYLAND_DISPLAY=wayland-0
 if [ -f "${'$'}ROOTFS_DIR/bin/bash" ]; then
@@ -370,20 +477,25 @@ fi
         Log.w(TAG, "Session finished with exit code: $exitCode (restart count: $restartCount/$MAX_RESTARTS)")
         onSessionStateChanged?.invoke(false)
         if (sessionFinishedHandled) return
+
+        val finishedDistro = sessions.entries.firstOrNull { it.value === finishedSession }?.key
+        if (finishedDistro != null) {
+            sessions[finishedDistro] = null
+        }
+
+        if (finishedDistro != terminalDistroId) return
+
         sessionFinishedHandled = true
         if (restartCount < MAX_RESTARTS) {
             restartCount++
             terminalView?.postDelayed({
                 sessionFinishedHandled = false
-                currentSession = null
-                startSession(currentDistroId)
+                startSession(terminalDistroId)
             }, 1000)
         } else {
             Log.e(TAG, "Max restarts reached, not restarting")
-            // Start a simple fallback shell
             terminalView?.postDelayed({
                 sessionFinishedHandled = false
-                currentSession = null
                 startFallbackSession()
             }, 500)
         }
@@ -404,7 +516,7 @@ fi
             val clip = clipboard.primaryClip
             if (clip != null && clip.itemCount > 0) {
                 val text = clip.getItemAt(0).coerceToText(context).toString()
-                currentSession?.emulator?.paste(text)
+                getCurrentSession()?.emulator?.paste(text)
             }
         } catch (e: Exception) {
             android.util.Log.w("EmbeddedTerminal", "Clipboard paste denied (not in focus)", e)

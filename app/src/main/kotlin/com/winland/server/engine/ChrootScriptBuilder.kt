@@ -1,11 +1,9 @@
 package com.winland.server.engine
 
 object ChrootScriptBuilder {
-    // Native Busybox path will be calculated dynamically from filesDir
     private const val XDG_RUNTIME_DIR_VAL = "/run/user/0"
     private const val PULSE_SOCKET_PATH = "/tmp/pulse-runtime/native"
     private const val PULSE_SERVER_VAL = "unix:/tmp/pulse-runtime/native"
-
 
     fun buildExtractScript(
         filesDir: String,
@@ -22,8 +20,7 @@ object ChrootScriptBuilder {
         return """
             #!/system/bin/sh
             set -e
-            
-            # Use internal busybox with fallback to system
+
             INTERNAL_BB="$filesDir/bin/busybox"
             if [ -x "${'$'}INTERNAL_BB" ]; then
                 BB="${'$'}INTERNAL_BB"
@@ -41,13 +38,11 @@ object ChrootScriptBuilder {
 
             unmount_safe() {
                 target="$1"
-                "${'$'}BB" umount "${'$'}target" 2>/dev/null || "${'$'}BB" umount -l "${'$'}target" 2>/dev/null || true
+                "${'$'}BB" umount -l "${'$'}target" 2>/dev/null || true
             }
 
             unmount_all_under_rootfs() {
-                # Ensure path is cleaned of double slashes
                 BASE_DIR="$rootfsDir"
-                # Sort mounts by length descending to unmount leaf nodes first
                 cat /proc/mounts | grep "${'$'}BASE_DIR" | awk '{print ${'$'}2}' | sort -r | while read -r mnt; do
                     "${'$'}BB" umount -l "${'$'}mnt" || true
                 done
@@ -104,7 +99,6 @@ object ChrootScriptBuilder {
                     ;;
             esac
 
-            # Final broad retry if extension-based failed
             if [ "${'$'}extract_ok" -ne 1 ]; then
                 echo "WARN: extension-based extraction failed, trying broad fallbacks..."
                 rm -rf "$stagedRootfsDir"/*
@@ -121,8 +115,34 @@ object ChrootScriptBuilder {
                 exit 1
             fi
 
+            echo "CHECKING FOR WRAPPING DIRECTORY..."
+            if [ -d "$stagedRootfsDir" ]; then
+                dir_contents=$("${'$'}BB" ls -A "$stagedRootfsDir")
+                first_entry=$(echo "${'$'}dir_contents" | head -1)
+                entry_count=$(echo "${'$'}dir_contents" | "${'$'}BB" wc -l)
+                if [ "${'$'}entry_count" -eq 1 ] && [ -d "$stagedRootfsDir/${'$'}first_entry" ] && [ "${'$'}first_entry" != "." ] && [ "${'$'}first_entry" != ".." ]; then
+                    echo "INFO: detected wrapping directory '${'$'}first_entry', relocating..."
+                    tmp_move="${stagedRootfsDir}_inner"
+                    mv "$stagedRootfsDir/${'$'}first_entry" "${'$'}tmp_move"
+                    rm -rf "$stagedRootfsDir"
+                    mv "${'$'}tmp_move" "$stagedRootfsDir"
+                    echo "INFO: relocation complete"
+                fi
+            fi
+
             echo "VALIDATING EXTRACTED ROOTFS..."
-            [ -x "$stagedRootfsDir/bin/bash" ] || { echo "ERROR: rootfs invalid (missing /bin/bash)"; exit 1; }
+            if [ -x "$stagedRootfsDir/bin/bash" ]; then
+                :
+            elif [ -x "$stagedRootfsDir/bin/dash" ]; then
+                echo "INFO: /bin/bash not found, symlinking /bin/dash -> /bin/bash"
+                ln -s dash "$stagedRootfsDir/bin/bash"
+            elif [ -x "$stagedRootfsDir/bin/sh" ]; then
+                echo "INFO: /bin/bash not found, symlinking /bin/sh -> /bin/bash"
+                ln -s sh "$stagedRootfsDir/bin/bash"
+            else
+                echo "ERROR: rootfs invalid (missing /bin/bash, /bin/dash, or /bin/sh)"
+                exit 1
+            fi
             [ -x "$stagedRootfsDir/usr/bin/grep" ] || { echo "ERROR: rootfs invalid (missing /usr/bin/grep)"; exit 1; }
             [ -x "$stagedRootfsDir/usr/bin/apt-get" ] || { echo "ERROR: rootfs invalid (missing /usr/bin/apt-get)"; exit 1; }
 
@@ -149,9 +169,8 @@ object ChrootScriptBuilder {
         return """
             #!/system/bin/sh
             set -e
-            # Enable verbose execution logging for startup debugging
             set -x
-            
+
             INTERNAL_BB="$filesDir/bin/busybox"
             if [ -x "${'$'}INTERNAL_BB" ]; then
                 BB="${'$'}INTERNAL_BB"
@@ -172,24 +191,22 @@ object ChrootScriptBuilder {
             }
 
             mount_safe() {
-                # Check if already mounted to avoid toybox mount errors
                 if ! grep -q " ${'$'}2 " /proc/mounts; then
                     "${'$'}BB" mount -t "${'$'}3" "${'$'}2" "${'$'}2" 2>/dev/null || "${'$'}BB" mount -o bind "${'$'}2" "${'$'}2" 2>/dev/null || echo "Warning: mount ${'$'}3 on ${'$'}2 failed"
                 fi
             }
 
             echo "SETUP: preparing mounts"
-            # Ensure /data is remounted if possible (might fail on some devices)
             "${'$'}BB" mount -o remount,dev,suid /data 2>/dev/null || true
-            
+
             ensure_directory $profileInstalledDir
             ensure_directory $tmpDir
             chmod 0755 $tmpDir
-            
+
             mkdir -p $rootfsDir/proc $rootfsDir/sys $rootfsDir/dev $rootfsDir/dev/pts $rootfsDir/external_storage
-            
+
             "${'$'}BB" mount -o bind $tmpDir $rootfsDir/tmp || echo "Warning: failed to bind mount /tmp" >> "${'$'}LOG_FILE"
-            
+
             echo "$(date): Starting critical mounts..." >> "${'$'}LOG_FILE"
             "${'$'}BB" mount -t proc proc $rootfsDir/proc || echo "proc mount failed" >> "${'$'}LOG_FILE"
             "${'$'}BB" mount -t sysfs sys $rootfsDir/sys || echo "sys mount failed" >> "${'$'}LOG_FILE"
@@ -197,21 +214,12 @@ object ChrootScriptBuilder {
             "${'$'}BB" mount -o bind /dev/pts $rootfsDir/dev/pts || echo "pts mount failed" >> "${'$'}LOG_FILE"
             "${'$'}BB" mount -o bind $externalStoragePath $rootfsDir/external_storage || true
 
-            mkdir -p $rootfsDir/dev/shm $rootfsDir/dev/binderfs
+            mkdir -p $rootfsDir/dev/shm
             "${'$'}BB" mount -t tmpfs -o nosuid,nodev tmpfs $rootfsDir/dev/shm || echo "shm mount failed" >> "${'$'}LOG_FILE"
             chmod 1777 $rootfsDir/dev/shm || true
-            
-            if [ -d /dev/binderfs ]; then
-                "${'$'}BB" mount -t binder binder $rootfsDir/dev/binderfs 2>/dev/null || "${'$'}BB" mount -o bind /dev/binderfs $rootfsDir/dev/binderfs || true
-                for node in binder hwbinder vndbinder; do
-                    ln -s /dev/binderfs/${'$'}node $rootfsDir/dev/${'$'}node 2>/dev/null || true
-                done
-            fi
 
             echo "SETUP: fixing GPU permissions"
-            # Standard DRI render nodes
             chmod 666 $rootfsDir/dev/dri/* 2>/dev/null || true
-            # Qualcomm Adreno specific nodes
             chmod 666 $rootfsDir/dev/kgsl-3d0 2>/dev/null || true
             chmod 666 $rootfsDir/dev/ion 2>/dev/null || true
 
@@ -233,8 +241,7 @@ EOF
                 export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
                 /usr/bin/grep -q "^aid_inet:" /etc/group || /usr/sbin/groupadd -g 3003 aid_inet || true
                 /usr/bin/id _apt >/dev/null 2>&1 && /usr/sbin/usermod -G nogroup -g aid_inet _apt || true
-                
-                # Setup dummy upower / battery for XFCE
+
                 echo "SETUP: spoofing battery for upower/xfce"
                 mkdir -p /etc/UPower
                 cat <<UP_EOF > /etc/UPower/UPower.conf
@@ -244,7 +251,6 @@ UsePercentageForPolicy=true
 ShortTermHistory=true
 LongTermHistory=true
 UP_EOF
-                # Create a fake battery device if possible (best effort)
                 mkdir -p /var/lib/upower
             '
 
@@ -274,15 +280,17 @@ UP_EOF
         rootfsDir: String,
         tmpDir: String,
         externalStoragePath: String,
-        density: Float
+        density: Float,
+        distroId: String
     ): String {
+        val otherDistroId = if (distroId == "ubuntu") "kali" else "ubuntu"
+        val otherRootfsDir = "$filesDir/rootfs_$otherDistroId"
         val desktopScale = density.coerceIn(0.5f, 1.5f)
         return """
             #!/system/bin/sh
-            # Allow execution even if some background tasks fail
             set +e
             set -x
-            
+
             INTERNAL_BB="$filesDir/bin/busybox"
             if [ -x "${'$'}INTERNAL_BB" ]; then
                 BB="${'$'}INTERNAL_BB"
@@ -290,11 +298,9 @@ UP_EOF
                 BB=$(command -v busybox || echo "busybox")
             fi
 
-            # Apply permissive mode if root allows, but don't exit if it fails
             setenforce 0 > /dev/null 2>&1 || true
 
             RUNTIME_LOG=$tmpDir/chroot-run.log
-            # Append instead of overwrite for clearer restart history
             echo "-----------------------------------" >> "${'$'}RUNTIME_LOG"
             echo "RUN START: $(date)" >> "${'$'}RUNTIME_LOG"
             exec 2>>"${'$'}RUNTIME_LOG"
@@ -341,14 +347,21 @@ UP_EOF
                 fi
             }
 
+            log_runtime "RUN: mutally unmounting other distro"
+            OTHER_ROOTFS="$otherRootfsDir"
+            if [ -d "${'$'}OTHER_ROOTFS" ]; then
+                cat /proc/mounts | grep "${'$'}OTHER_ROOTFS" | awk '{print ${'$'}2}' | sort -r | while read -r mnt; do
+                    "${'$'}BB" umount -l "${'$'}mnt" 2>/dev/null || true
+                done
+            fi
+
             log_runtime "RUN: preparing runtime mounts"
             "${'$'}BB" mount -o remount,dev,suid /data 2>/dev/null || true
             SHARED_SOCKET_DIR="$filesDir/tmp"
             GUEST_SHARED_SOCKET_DIR="$rootfsDir$filesDir/tmp"
             ensure_directory "$tmpDir"
             ensure_directory "${'$'}SHARED_SOCKET_DIR"
-            
-            # Ensure Wayland socket is world-accessible for chroot processes
+
             if [ -S "${'$'}SHARED_SOCKET_DIR/wayland-0" ]; then
                 chmod 777 "${'$'}SHARED_SOCKET_DIR/wayland-0" 2>/dev/null || true
             fi
@@ -358,7 +371,7 @@ UP_EOF
             ensure_directory $rootfsDir/dev
             ensure_directory $rootfsDir/dev/pts
             ensure_directory $rootfsDir/external_storage
-            
+
             mount_fs_if_needed proc proc "$rootfsDir/proc"
             mount_fs_if_needed sysfs sys "$rootfsDir/sys"
             mount_bind_if_needed /dev "$rootfsDir/dev"
@@ -366,27 +379,19 @@ UP_EOF
             mount_bind_if_needed $externalStoragePath "$rootfsDir/external_storage"
 
             ensure_directory $rootfsDir/dev/shm
-            ensure_directory $rootfsDir/dev/binderfs
             mount_fs_if_needed tmpfs tmpfs "$rootfsDir/dev/shm" "nosuid,nodev"
             chmod 1777 $rootfsDir/dev/shm || true
-
-            if [ -d /dev/binderfs ]; then
-                "${'$'}BB" mount -t binder binder $rootfsDir/dev/binderfs 2>/dev/null || "${'$'}BB" mount -o bind /dev/binderfs $rootfsDir/dev/binderfs || true
-                for node in binder hwbinder vndbinder; do
-                    ln -s /dev/binderfs/${'$'}node $rootfsDir/dev/${'$'}node 2>/dev/null || true
-                done
-            fi
             ensure_directory $rootfsDir/tmp
             mount_bind_if_needed $tmpDir "$rootfsDir/tmp"
             ensure_directory "${'$'}GUEST_SHARED_SOCKET_DIR"
             mount_bind_if_needed $tmpDir "${'$'}GUEST_SHARED_SOCKET_DIR"
-            
+
             ensure_directory $rootfsDir/tmp/pulse-runtime
             chmod 777 $rootfsDir/tmp/pulse-runtime
 
             log_runtime "RUN: starting desktop session"
             echo "$(date): Starting chroot environment..." >> "${'$'}RUNTIME_LOG"
-            
+
             chroot $rootfsDir /usr/bin/env -i \
                 HOME=/root \
                 TERM=xterm \
@@ -396,7 +401,7 @@ UP_EOF
                 WINLAND_SOCKET_DIR=$filesDir/tmp \
                 PULSE_SERVER=$PULSE_SERVER_VAL \
                 /bin/bash -l <<'CHROOT_EOF'
-                
+
                 log_runtime_guest() {
                     echo "$(date '+%Y-%m-%d %H:%M:%S') ${'$'}1" >> /tmp/chroot-run.log
                 }
@@ -405,35 +410,27 @@ UP_EOF
                     if command -v dbus-run-session >/dev/null 2>&1; then
                         dbus-run-session -- "$@"
                     else
-                        # Fallback for older systems
                         eval "$@"
                     fi
                 }
 
-                # Define isolated runtime dir and identity.
-                # Keep /tmp for shared host wayland socket mount, but keep runtime bus/audio dirs root-owned.
                 export PRIVATE_RUNTIME_DIR=$XDG_RUNTIME_DIR_VAL
                 export HOME=/root
                 export USER=root
                 export LOGNAME=root
-                
-                # Ensure system identity
+
                 [ ! -s /etc/machine-id ] && dbus-uuidgen > /etc/machine-id 2>/dev/null || true
 
-                # Create and own the runtime dir BEFORE dbus-launch so dbus uses it
                 mkdir -p "${'$'}PRIVATE_RUNTIME_DIR"
                 chmod 700 "${'$'}PRIVATE_RUNTIME_DIR" || true
                 export XDG_RUNTIME_DIR="${'$'}PRIVATE_RUNTIME_DIR"
 
-                # Setup D-Bus Session Bus
                 echo "Starting D-Bus Session Bus..."
                 if command -v dbus-launch >/dev/null 2>&1; then
-                    # Launch and export variables for all child processes (XFCE, etc.)
                     eval $(dbus-launch --sh-syntax)
                     log_runtime_guest "D-Bus session bus started: DBUS_SESSION_BUS_ADDRESS=${'$'}DBUS_SESSION_BUS_ADDRESS"
                 fi
-                
-                # Audio: Start PulseAudio session
+
                 echo "Starting PulseAudio..."
                 mkdir -p /tmp/pulse-runtime
                 chmod 777 /tmp/pulse-runtime 2>/dev/null || true
@@ -444,8 +441,6 @@ UP_EOF
                 default-server = $PULSE_SERVER_VAL
 CLIENT_EOF
                 mkdir -p /tmp/audio_bridge
-                # Create FIFO and pre-open it with O_RDWR (non-blocking) so
-                # module-pipe-sink doesn't deadlock waiting for a reader.
                 mkfifo -m 666 /tmp/audio_bridge/fifo 2>/dev/null || true
                 exec 3<>/tmp/audio_bridge/fifo
                 cat <<PULSE_EOF > /tmp/pulse.pa
@@ -453,7 +448,7 @@ CLIENT_EOF
                 load-module module-pipe-sink sink_name=AndroidSink file=/tmp/audio_bridge/fifo format=s16le channels=2 rate=44100
                 set-default-sink AndroidSink
 PULSE_EOF
-                
+
                 unset PULSE_SERVER
                 rm -f /run/user/0/pulse/pid 2>/dev/null || true
                 pulseaudio -n -F /tmp/pulse.pa --daemonize --realtime=no --disallow-exit --exit-idle-time=-1 --disable-shm=yes --use-pid-file=false --log-target=file:/tmp/pulse-verbose.log -vvvv || true
@@ -473,16 +468,14 @@ PULSE_EOF
                 if [ "${'$'}pulse_wait_ok" -ne 1 ]; then
                     log_runtime_guest "WARN: pulse socket missing at $PULSE_SOCKET_PATH"
                 fi
-                
+
                 export WAYLAND_DISPLAY=wayland-0
 
-                # Block until host provides native Wayland bridge socket
                 wayland_wait_ok=0
                 i=0
                 log_runtime_guest "Waiting for ${'$'}WINLAND_SOCKET_DIR/wayland-0 (max 30s)..."
                 while [ "${'$'}i" -lt 30 ]; do
                     if [ -S "${'$'}WINLAND_SOCKET_DIR/wayland-0" ]; then
-                        # Verify the socket is actually usable (not just a stale file)
                         wayland_wait_ok=1
                         log_runtime_guest "RUN: confirmed native ${'$'}WINLAND_SOCKET_DIR/wayland-0 socket"
                         break
@@ -496,15 +489,12 @@ PULSE_EOF
                     exit 1
                 fi
 
-                # Map socket into root-owned runtime dir for standardized Wayland clients.
                 mkdir -p "${'$'}XDG_RUNTIME_DIR"
                 ln -sfn "${'$'}WINLAND_SOCKET_DIR/wayland-0" "${'$'}XDG_RUNTIME_DIR/wayland-0"
                 log_runtime_guest 'RUN: linked wayland socket into private runtime dir'
 
-                # Launch XFCE desktop session via Wayland
                 log_runtime_guest 'RUN: launching XFCE desktop session'
 
-                # Setup Environment for Wayland runtime
                 export DISPLAY=:0
                 export WAYLAND_DISPLAY=wayland-0
                 export XDG_SESSION_TYPE=wayland
@@ -521,10 +511,12 @@ PULSE_EOF
                 export QT_AUTO_SCREEN_SCALE_FACTOR=1
                 export QT_SCALE_FACTOR=$desktopScale
 
-                # Launch startxfce4 as the main desktop session
                 if command -v startxfce4 >/dev/null 2>&1; then
                     log_runtime_guest "RUN: launching startxfce4 --wayland..."
                     run_in_dbus_session startxfce4 --wayland >/tmp/xfce4-wayland.log 2>&1
+                elif command -v labwc >/dev/null 2>&1; then
+                    log_runtime_guest "RUN: launching labwc (startxfce4 not found)..."
+                    run_in_dbus_session labwc -s /etc/xdg/labwc/autostart >/tmp/labwc-wayland.log 2>&1
                 else
                     log_runtime_guest "FATAL: startxfce4 not found in guest PATH"
                     exit 1
@@ -545,7 +537,7 @@ CHROOT_EOF
 
             unmount_safe() {
                 target="$1"
-                "${'$'}BB" umount "${'$'}target" 2>/dev/null || "${'$'}BB" umount -l "${'$'}target" 2>/dev/null || true
+                "${'$'}BB" umount -l "${'$'}target" 2>/dev/null || true
             }
 
             "${'$'}BB" chroot $rootfsDir /bin/bash -c '

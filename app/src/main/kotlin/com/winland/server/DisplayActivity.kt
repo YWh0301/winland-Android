@@ -445,7 +445,7 @@ class DisplayActivity : ComponentActivity() {
                             }
 
                             val nativeInitOk = withContext(Dispatchers.IO) {
-                                NativeBridge.initWaylandConnection(holder.surface, this@DisplayActivity)
+                                NativeBridge.initWaylandConnection(holder.surface, this@DisplayActivity, distroId)
                             }
                             isNativeBridgeInitialized = nativeInitOk
                             Log.i("WinlandDiag", "NativeBridge.initWaylandConnection: result=$nativeInitOk")

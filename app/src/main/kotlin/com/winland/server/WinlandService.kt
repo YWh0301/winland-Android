@@ -50,10 +50,16 @@ class WinlandService : LifecycleService() {
         traceLifecycle("onCreate") {
             super.onCreate()
             Log.i(TAG, "WinlandService Created")
-            // Start compositor thread NOW — before any Activity binds a surface.
-            val ok = NativeBridge.ensureSocketRuntime(this)
+            val activeDistroId = getSharedPreferences("winland_prefs", MODE_PRIVATE)
+                .getString("active_distro_id", "ubuntu") ?: "ubuntu"
+            val ok = try {
+                NativeBridge.ensureSocketRuntime(this, activeDistroId)
+            } catch (t: Throwable) {
+                Log.e(TAG, "ensureSocketRuntime onCreate failed", t)
+                false
+            }
             socketRuntimeReady = ok
-            Log.i(TAG, "ensureSocketRuntime onCreate result=$ok")
+            Log.i(TAG, "ensureSocketRuntime onCreate result=$ok (distro=$activeDistroId)")
         }
     }
 
@@ -76,23 +82,28 @@ class WinlandService : LifecycleService() {
             // Acquire partial wake lock to keep the process alive across Activity restarts.
             acquireWakeLock()
 
-            // Start Wayland compositor (socket wayland-0) immediately, independent of any Activity.
-            // This ensures the socket survives Activity lifecycle changes (pause/resume/rotate).
-            val ok = NativeBridge.ensureSocketRuntime(this)
+            // Update compositor XKB config for current distro (compositor may already be running).
+            val activeDistroId = getSharedPreferences("winland_prefs", MODE_PRIVATE)
+                .getString("active_distro_id", "ubuntu") ?: "ubuntu"
+            val ok = try {
+                NativeBridge.ensureSocketRuntime(this, activeDistroId)
+            } catch (t: Throwable) {
+                Log.e(TAG, "ensureSocketRuntime onStartCommand failed", t)
+                false
+            }
             socketRuntimeReady = ok
-            Log.i(TAG, "ensureSocketRuntime onStartCommand result=$ok")
+            Log.i(TAG, "ensureSocketRuntime onStartCommand result=$ok (distro=$activeDistroId)")
 
             if (!runtimeStarted) {
                 runtimeStarted = true
                 lifecycleScope.launch(Dispatchers.Default) {
                     try {
-                        audioServer.start()
-                        cameraBridge = WinlandCameraBridge(this@WinlandService)
-                        cameraBridge.start(this@WinlandService)
-
                         if (!NativeBridge.awaitLibrariesLoaded()) {
                             Log.e(TAG, "Native libraries not loaded; service running in degraded mode")
                         }
+                        audioServer.start()
+//                        cameraBridge = WinlandCameraBridge(this@WinlandService)
+//                        cameraBridge.start(this@WinlandService)
                     } catch (t: Throwable) {
                         Log.e(TAG, "Failed starting runtime components", t)
                     }

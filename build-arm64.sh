@@ -45,21 +45,27 @@ else
     cd "$XKB_DIR"
 
     if [ -d "build-android" ]; then
-        rm -rf build-android
+        meson setup --reconfigure build-android \
+            --cross-file android-arm64.ini \
+            --auto-features=disabled \
+            -Denable-tools=false \
+            -Denable-x11=false \
+            -Denable-xkbregistry=false \
+            -Denable-bash-completion=false > /dev/null 2>&1
+    else
+        meson setup build-android \
+            --cross-file android-arm64.ini \
+            --auto-features=disabled \
+            -Denable-tools=false \
+            -Denable-x11=false \
+            -Denable-xkbregistry=false \
+            -Denable-bash-completion=false
     fi
 
-    meson setup build-android \
-        --cross-file android-arm64.ini \
-        --auto-features=disabled \
-        -Denable-tools=false \
-        -Denable-x11=false \
-        -Denable-xkbregistry=false \
-        -Denable-bash-completion=false
-
-    meson compile -C build-android
+    ninja -C build-android libxkbcommon.so
 
     cd "$PROJECT_ROOT"
-    echo -e "${GREEN}✓ Minimal libxkbcommon.so built successfully!${NC}"
+    echo -e "${GREEN}✓ libxkbcommon.so built successfully!${NC}"
 fi
 # =====================================================================
 
@@ -85,7 +91,7 @@ export CXX_aarch64_linux_android=/opt/android/ndk/toolchains/llvm/prebuilt/linux
 # Build Rust native library
 echo -e "${YELLOW}📦 Building Rust native library (ARM64)...${NC}"
 cd native
-rm -f target/aarch64-linux-android/release/libuniffi_winland_core.so   # FIXED: use -f instead of -r
+rm -f target/aarch64-linux-android/release/libuniffi_winland_core.so
 cargo build \
     --release \
     --lib \
@@ -124,6 +130,5 @@ export ANDROID_NDK_ROOT=/opt/android/ndk
 echo -e "${GREEN}✓ Build completed successfully!${NC}"
 echo "==========================================="
 echo -e "${GREEN}APK location: ${NC}app/build/outputs/apk/"
-sleep 1
 
-cp -r /root/winland-Android/app/build/outputs/apk/debug/* /sdcard
+cp -r /root/winland-Android/app/build/outputs/apk/debug/* /sdcard 2>/dev/null || echo "⚠️ Could not copy APK to /sdcard"

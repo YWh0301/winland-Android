@@ -18,3 +18,12 @@ fun Context.getUnifiedTmpDir(): String {
 fun Context.getUnifiedRootfsDir(distroId: String = "ubuntu"): String {
     return "${getUnifiedFilesDir()}/rootfs_$distroId"
 }
+
+fun Context.getInstalledDistros(): List<String> {
+    val filesDir = getUnifiedFilesDir()
+    val dir = java.io.File(filesDir)
+    return dir.listFiles()
+        ?.filter { it.isDirectory && it.name.startsWith("rootfs_") }
+        ?.map { it.name.removePrefix("rootfs_") }
+        ?: emptyList()
+}

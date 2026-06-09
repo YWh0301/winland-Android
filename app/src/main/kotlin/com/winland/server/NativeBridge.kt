@@ -102,9 +102,9 @@ object NativeBridge {
         return isLibLoaded
     }
 
-    external fun initWaylandConnection(surface: Surface, activity: Any): Boolean
+    external fun initWaylandConnection(surface: Surface, activity: Any, distroId: String): Boolean
     external fun rebindSurface(surface: Surface)
-    external fun ensureSocketRuntime(context: Any): Boolean
+    external fun ensureSocketRuntime(context: Any, distroId: String): Boolean
     external fun onSurfaceChanged(width: Int, height: Int, physicalWidthMm: Int, physicalHeightMm: Int)
     external fun releaseWaylandConnection()
     external fun initAudioBridge()

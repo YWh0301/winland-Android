@@ -1,4 +1,4 @@
-use jni::{JNIEnv, objects::{JClass, JObject}};
+use jni::{JNIEnv, objects::{JClass, JObject, JString}};
 use jni::sys::jboolean;
 use crate::android::utils::context::ApplicationContext;
 use std::panic::AssertUnwindSafe;
@@ -59,6 +59,7 @@ pub unsafe extern "system" fn Java_com_winland_server_NativeBridge_initWaylandCo
     _class: JClass,
     surface: JObject,
     activity: JObject,
+    distro_id: JObject,
 ) -> jboolean {
     android_logger::init_once(
         android_logger::Config::default()
@@ -70,6 +71,11 @@ pub unsafe extern "system" fn Java_com_winland_server_NativeBridge_initWaylandCo
     let init_result = std::panic::catch_unwind(AssertUnwindSafe(|| -> Result<(), String> {
         log::info!("JNI: initWaylandConnection called.");
 
+        let distro_id: String = env
+            .get_string(&JString::from(distro_id))
+            .map_err(|error| format!("Failed to get distro_id string: {error}"))?
+            .into();
+
         let activity_ref = env
             .new_global_ref(activity)
             .map_err(|error| format!("Failed to create global activity ref: {error}"))?;
@@ -78,8 +84,8 @@ pub unsafe extern "system" fn Java_com_winland_server_NativeBridge_initWaylandCo
         ApplicationContext::build(&mut env, &activity_ref)
             .map_err(|e| format!("ApplicationContext buildup failed: {e}"))?;
 
-        log::info!("JNI: Phase 2 - Starting compositor thread...");
-        crate::compositor::spawn()
+        log::info!("JNI: Phase 2 - Starting compositor thread (distro={distro_id})...");
+        crate::compositor::spawn(&distro_id)
             .map_err(|error| format!("Compositor spawn failed: {error}"))?;
 
         log::info!("JNI: Phase 3 - Binding ANativeWindow on compositor thread...");
@@ -121,6 +127,7 @@ pub unsafe extern "system" fn Java_com_winland_server_NativeBridge_ensureSocketR
     mut env: JNIEnv,
     _class: JClass,
     context: JObject,
+    distro_id: JObject,
 ) -> jboolean {
     android_logger::init_once(
         android_logger::Config::default()
@@ -129,6 +136,11 @@ pub unsafe extern "system" fn Java_com_winland_server_NativeBridge_ensureSocketR
     );
 
     let result = std::panic::catch_unwind(AssertUnwindSafe(|| -> Result<(), String> {
+        let distro_id: String = env
+            .get_string(&JString::from(distro_id))
+            .map_err(|error| format!("Failed to get distro_id string: {error}"))?
+            .into();
+
         let context_ref = env
             .new_global_ref(context)
             .map_err(|error| format!("Failed to create global context ref: {error}"))?;
@@ -136,7 +148,8 @@ pub unsafe extern "system" fn Java_com_winland_server_NativeBridge_ensureSocketR
         ApplicationContext::build(&mut env, &context_ref)
             .map_err(|e| format!("ApplicationContext buildup failed: {e}"))?;
 
-        crate::compositor::spawn()
+        log::info!("JNI: ensureSocketRuntime started (distro={distro_id})");
+        crate::compositor::spawn(&distro_id)
             .map_err(|error| format!("Compositor bootstrap failed: {error}"))?;
 
         log::info!("JNI: ensureSocketRuntime completed (Wayland socket should be available)");

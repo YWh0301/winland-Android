@@ -50,10 +50,10 @@ class MainActionCoordinator(
             }
 
             withContext(Dispatchers.Main) {
-                viewModel.refreshChrootRuntimeState()
                 if (result.success) {
                     viewModel.setActiveDistro(distro.id)
-                    viewModel.updateDistroStage(distro.id, "Download + extract complete")
+                    viewModel.refreshChrootRuntimeState()
+                    viewModel.updateDistroStage(distro.id, "setup")
                     showToast("Download + extract complete. Press Setup.", false)
                 } else {
                     viewModel.updateDistroStage(distro.id, "Download/Extract failed; retry install")
@@ -69,11 +69,6 @@ class MainActionCoordinator(
     }
 
     fun handleDistroSetup(distroId: String) {
-        val activeDistroId = viewModel.activeDistroId.value
-        if (activeDistroId != null && activeDistroId != distroId) {
-            showToast("Setup is currently tied to $activeDistroId. Install this distro first.", true)
-            return
-        }
         if (!viewModel.tryBeginOperation(MainViewModel.UiOperation.SETUP)) {
             showToast("Another operation is running. Wait until it finishes.", false)
             return
@@ -94,11 +89,6 @@ class MainActionCoordinator(
     }
 
     fun handleDistroRun(distroId: String) {
-        val activeDistroId = viewModel.activeDistroId.value
-        if (activeDistroId != distroId) {
-            showToast("Run is only available for the installed distro: ${activeDistroId ?: "none"}.", true)
-            return
-        }
         if (!viewModel.tryBeginOperation(MainViewModel.UiOperation.RUN)) {
             showToast("Another operation is running. Wait until it finishes.", false)
             return

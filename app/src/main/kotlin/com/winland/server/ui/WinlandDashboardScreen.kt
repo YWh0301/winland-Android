@@ -35,6 +35,7 @@ import androidx.compose.material.icons.filled.Laptop
 import androidx.compose.material.icons.filled.Mouse
 import androidx.compose.material.icons.filled.LightMode
 import androidx.compose.material.icons.filled.PhoneAndroid
+import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CardDefaults
@@ -43,7 +44,6 @@ import androidx.compose.material3.CenterAlignedTopAppBar
 import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
@@ -72,6 +72,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
@@ -87,6 +88,7 @@ import com.winland.server.LinuxDistro
 import com.winland.server.MainViewModel
 import com.winland.server.NativeBridge
 import com.winland.server.engine.ChrootInstaller
+import com.winland.server.utils.getInstalledDistros
 
 data class WinlandDashboardActions(
     val onRequestUsb: () -> Unit,
@@ -142,10 +144,17 @@ fun WinlandDashboardScreen(
     val embeddedTerminal = remember { EmbeddedTerminal(appContext) }
     var ctrlActive by remember { mutableStateOf(false) }
     var altActive by remember { mutableStateOf(false) }
+    val terminalDistroId = activeDistroId ?: "ubuntu"
     val keyboardController = LocalSoftwareKeyboardController.current
 
     LaunchedEffect(selectedTab) {
         keyboardController?.hide()
+    }
+
+    LaunchedEffect(terminalDistroId) {
+        if (selectedTab == DashboardTab.Terminal) {
+            embeddedTerminal.startSession(terminalDistroId)
+        }
     }
 
     Scaffold(
@@ -159,32 +168,36 @@ fun WinlandDashboardScreen(
         BoxWithConstraints(modifier = Modifier.fillMaxSize().padding(innerPadding)) {
             val isWide = maxWidth >= 1000.dp
 
-            Column(modifier = Modifier.fillMaxSize()) {
-                Box(modifier = Modifier.weight(1f)) {
-                    if (selectedTab == DashboardTab.Terminal) {
-                        val currentDistroId = activeDistroId ?: "ubuntu"
+            Box(modifier = Modifier.fillMaxSize()) {
+                if (selectedTab == DashboardTab.Terminal) {
+                    val imeVisible = WindowInsets.ime.getBottom(LocalDensity.current) > 0
 
-                        LaunchedEffect(Unit) {
-                            embeddedTerminal.onBarStateChanged = { c, a ->
-                                ctrlActive = c
-                                altActive = a
-                            }
+                    LaunchedEffect(Unit) {
+                        embeddedTerminal.onBarStateChanged = { c, a ->
+                            ctrlActive = c
+                            altActive = a
                         }
+                    }
 
-                        Column(
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .background(Color(0xFF282C34))
-                                .imePadding()
-                        ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(Color(0xFF282C34))
+                            .imePadding()
+                            .padding(bottom = if (imeVisible) 0.dp else 84.dp)
+                    ) {
+                        Box(modifier = Modifier.weight(1f)) {
                             AndroidView(
                                 factory = { _ ->
                                     val view = embeddedTerminal.createView()
-                                    embeddedTerminal.startSession(currentDistroId)
+                                    embeddedTerminal.startSession(terminalDistroId)
                                     view
                                 },
-                                modifier = Modifier.fillMaxWidth().weight(1f)
+                                update = {},
+                                modifier = Modifier.fillMaxSize()
                             )
+                        }
+                        if (imeVisible) {
                             TerminalExtraKeysBar(
                                 ctrlActive = ctrlActive,
                                 altActive = altActive,
@@ -202,36 +215,65 @@ fun WinlandDashboardScreen(
                                 modifier = Modifier.fillMaxWidth()
                             )
                         }
-                    } else {
-                        Column(
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .padding(horizontal = 14.dp)
-                        ) {
-                            activeOperationText?.let { op ->
-                                ElevatedCard(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(top = 10.dp, bottom = 6.dp),
-                                    colors = CardDefaults.elevatedCardColors(containerColor = MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.55f))
-                                ) {
-                                    Text(
-                                        text = "Active operation: $op. Buttons are locked until completion.",
-                                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
-                                        color = MaterialTheme.colorScheme.onTertiaryContainer,
-                                        style = MaterialTheme.typography.labelLarge
-                                    )
-                                }
+                    }
+                } else {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(horizontal = 14.dp)
+                            .padding(bottom = 84.dp)
+                    ) {
+                        activeOperationText?.let { op ->
+                            ElevatedCard(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(top = 10.dp, bottom = 6.dp),
+                                colors = CardDefaults.elevatedCardColors(containerColor = MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.55f))
+                            ) {
+                                Text(
+                                    text = "Active operation: $op. Buttons are locked until completion.",
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                                    color = MaterialTheme.colorScheme.onTertiaryContainer,
+                                    style = MaterialTheme.typography.labelLarge
+                                )
                             }
+                        }
 
-                            Spacer(Modifier.height(6.dp))
+                        Spacer(Modifier.height(6.dp))
 
-                            if (selectedTab == DashboardTab.Home) {
-                                if (isWide) {
-                                    Row(
-                                        modifier = Modifier.fillMaxWidth().weight(1f),
-                                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        if (selectedTab == DashboardTab.Home) {
+                            if (isWide) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth().weight(1f),
+                                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                                ) {
+                                    LogPanel(
+                                        displayedLogs = displayedLogs,
+                                        logSearchQuery = logSearchQuery,
+                                        logsPaused = logsPaused,
+                                        onCopyLogs = { clipboard.setText(AnnotatedString(displayedLogs.joinToString("\n"))) },
+                                        onToggleLogsPaused = { viewModel.toggleLogsPaused() },
+                                        onSearchChange = { viewModel.setLogSearchQuery(it) },
+                                        modifier = Modifier.weight(1.4f)
+                                    )
+                                    LazyColumn(
+                                        modifier = Modifier.weight(1f),
+                                        verticalArrangement = Arrangement.spacedBy(12.dp)
                                     ) {
+                                        items(distros) { distro ->
+                                            DistroCard(distro, viewModel, actions)
+                                        }
+                                    }
+                                }
+                            } else {
+                                LazyColumn(
+                                    modifier = Modifier.fillMaxWidth().weight(1f),
+                                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                                ) {
+                                    items(distros) { distro ->
+                                        DistroCard(distro, viewModel, actions)
+                                    }
+                                    item {
                                         LogPanel(
                                             displayedLogs = displayedLogs,
                                             logSearchQuery = logSearchQuery,
@@ -239,58 +281,31 @@ fun WinlandDashboardScreen(
                                             onCopyLogs = { clipboard.setText(AnnotatedString(displayedLogs.joinToString("\n"))) },
                                             onToggleLogsPaused = { viewModel.toggleLogsPaused() },
                                             onSearchChange = { viewModel.setLogSearchQuery(it) },
-                                            modifier = Modifier.weight(1.4f)
+                                            modifier = Modifier.fillMaxWidth().height(280.dp)
                                         )
-                                        LazyColumn(
-                                            modifier = Modifier.weight(1f),
-                                            verticalArrangement = Arrangement.spacedBy(12.dp)
-                                        ) {
-                                            items(distros) { distro ->
-                                                DistroCard(distro, viewModel, actions)
-                                            }
-                                        }
-                                    }
-                                } else {
-                                    LazyColumn(
-                                        modifier = Modifier.fillMaxWidth().weight(1f),
-                                        verticalArrangement = Arrangement.spacedBy(12.dp)
-                                    ) {
-                                        items(distros) { distro ->
-                                            DistroCard(distro, viewModel, actions)
-                                        }
-                                        item {
-                                            LogPanel(
-                                                displayedLogs = displayedLogs,
-                                                logSearchQuery = logSearchQuery,
-                                                logsPaused = logsPaused,
-                                                onCopyLogs = { clipboard.setText(AnnotatedString(displayedLogs.joinToString("\n"))) },
-                                                onToggleLogsPaused = { viewModel.toggleLogsPaused() },
-                                                onSearchChange = { viewModel.setLogSearchQuery(it) },
-                                                modifier = Modifier.fillMaxWidth().height(280.dp)
-                                            )
-                                        }
                                     }
                                 }
-                            } else {
-                                SettingsPanel(
-                                    viewModel = viewModel,
-                                    followSystemTheme = themeSettings.followSystemTheme,
-                                    darkModeEnabled = themeSettings.darkModeEnabled,
-                                    screenPreset = themeSettings.screenPreset,
-                                    onThemeModeChanged = { followSystem, darkEnabled ->
-                                        viewModel.updateThemeMode(followSystem, darkEnabled)
-                                    },
-                                    onResolutionApplied = { resolution ->
-                                        actions.onShowMessage("Resolution updated to $resolution", false)
-                                    },
-                                    onRequestUsb = actions.onRequestUsb,
-                                    onStopChroot = actions.onDistroStop,
-                                    onRestartChroot = actions.onDistroRestart,
-                                    activeDistroId = activeDistroId,
-                                    controlsEnabled = activeUiOperation == null,
-                                    modifier = Modifier.fillMaxWidth().weight(1f)
-                                )
                             }
+                        } else {
+                            SettingsPanel(
+                                distros = distros,
+                                viewModel = viewModel,
+                                followSystemTheme = themeSettings.followSystemTheme,
+                                darkModeEnabled = themeSettings.darkModeEnabled,
+                                screenPreset = themeSettings.screenPreset,
+                                onThemeModeChanged = { followSystem, darkEnabled ->
+                                    viewModel.updateThemeMode(followSystem, darkEnabled)
+                                },
+                                onResolutionApplied = { resolution ->
+                                    actions.onShowMessage("Resolution updated to $resolution", false)
+                                },
+                                onRequestUsb = actions.onRequestUsb,
+                                onStopChroot = actions.onDistroStop,
+                                onRestartChroot = actions.onDistroRestart,
+                                activeDistroId = activeDistroId,
+                                controlsEnabled = activeUiOperation == null,
+                                modifier = Modifier.fillMaxWidth().weight(1f)
+                            )
                         }
                     }
                 }
@@ -300,7 +315,8 @@ fun WinlandDashboardScreen(
                     onTabSelected = {
                         haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                         viewModel.setSelectedTab(it)
-                    }
+                    },
+                    modifier = Modifier.align(Alignment.BottomCenter)
                 )
             }
         }
@@ -404,6 +420,7 @@ private fun LogPanel(
 
 @Composable
 private fun SettingsPanel(
+    distros: List<LinuxDistro>,
     viewModel: MainViewModel,
     followSystemTheme: Boolean,
     darkModeEnabled: Boolean,
@@ -417,10 +434,12 @@ private fun SettingsPanel(
     controlsEnabled: Boolean,
     modifier: Modifier = Modifier
 ) {
+    val appContext = LocalContext.current
     val displayInfo by viewModel.displayInfo.collectAsState()
     var localFollowSystem by remember { mutableStateOf(followSystemTheme) }
     var localDarkMode by remember { mutableStateOf(darkModeEnabled) }
     var localScreenPreset by remember { mutableStateOf(screenPreset) }
+    val installedDistros = remember { appContext.getInstalledDistros() }
 
     LaunchedEffect(followSystemTheme, darkModeEnabled, screenPreset) {
         localFollowSystem = followSystemTheme
@@ -455,6 +474,56 @@ private fun SettingsPanel(
             fontWeight = FontWeight.SemiBold,
             modifier = Modifier.padding(top = 6.dp)
         )
+
+        ElevatedCard(colors = CardDefaults.elevatedCardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHigh)) {
+            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Default.Home, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text("Default Distro", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                }
+                HorizontalDivider(modifier = Modifier.padding(vertical = 2.dp), color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+                distros.forEach { distro ->
+                    val isInstalled = distro.id in installedDistros
+                    val isActive = distro.id == activeDistroId
+                    val canSelect = isInstalled
+                    Surface(
+                        onClick = { if (canSelect) viewModel.setActiveDistro(distro.id) },
+                        shape = RoundedCornerShape(12.dp),
+                        color = if (isActive) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f) else MaterialTheme.colorScheme.surface,
+                        tonalElevation = if (isActive) 2.dp else 0.dp,
+                        modifier = Modifier.fillMaxWidth(),
+                        enabled = canSelect
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp, vertical = 14.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            RadioButton(
+                                selected = isActive,
+                                onClick = { if (canSelect) viewModel.setActiveDistro(distro.id) },
+                                enabled = canSelect
+                            )
+                            Spacer(Modifier.width(12.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = distro.name,
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    fontWeight = if (isActive) FontWeight.SemiBold else FontWeight.Normal
+                                )
+                                Text(
+                                    text = if (isInstalled) "Installed" else "Not installed",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = if (isInstalled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
 
         ElevatedCard(colors = CardDefaults.elevatedCardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHigh)) {
             Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -718,9 +787,9 @@ private fun DistroCard(
     viewModel: MainViewModel,
     actions: WinlandDashboardActions
 ) {
+    val context = LocalContext.current
     val haptics = LocalHapticFeedback.current
     val activeUiOperation by viewModel.activeUiOperation.collectAsState()
-    val chrootRuntimeState by viewModel.chrootRuntimeState.collectAsState()
     val activeDistroId by viewModel.activeDistroId.collectAsState()
     val isSettingUp = activeUiOperation == MainViewModel.UiOperation.SETUP
     val distroUiStates by viewModel.distroUiStates.collectAsState()
@@ -731,23 +800,21 @@ private fun DistroCard(
     val stageText = currentUiState.stageText
     val lastStageUpdate = currentUiState.lastStageUpdate
     val updateStage: (String) -> Unit = { next -> viewModel.updateDistroStage(distro.id, next) }
+    val perDistroStates by viewModel.perDistroChrootState.collectAsState()
+    val refreshSignal by viewModel.perDistroRefreshSignal.collectAsState()
+    val distroChrootState = perDistroStates[distro.id]
 
-    LaunchedEffect(Unit) {
-        viewModel.refreshChrootRuntimeState()
+    LaunchedEffect(distro.id, refreshSignal) {
+        viewModel.refreshChrootRuntimeStateForDistro(distro.id)
     }
 
-    val cardOwnsRuntime = activeDistroId == distro.id
     val currentStage = when {
-        cardOwnsRuntime && chrootRuntimeState.ready -> "run"
-        cardOwnsRuntime && chrootRuntimeState.isExtracted -> "setup"
+        distroChrootState?.ready == true -> "run"
+        distroChrootState?.isExtracted == true -> "setup"
         else -> "install"
     }
-    val statusReady = cardOwnsRuntime && chrootRuntimeState.ready
-    val statusText = when {
-        cardOwnsRuntime -> chrootRuntimeState.reason
-        activeDistroId == null -> "No distro installed yet"
-        else -> "Active distro is $activeDistroId"
-    }
+    val statusReady = distroChrootState?.ready == true
+    val statusText = distroChrootState?.reason ?: "Checking status..."
 
     val operationLocked = activeUiOperation != null
     val lockReason = when {

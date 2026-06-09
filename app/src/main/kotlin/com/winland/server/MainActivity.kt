@@ -53,7 +53,10 @@ class MainActivity : ComponentActivity() {
             showToast = ::showToastSafe,
             runtimeLauncher = RuntimeLauncher {
                 startWinlandService()
-                startActivity(Intent(this, DisplayActivity::class.java))
+                val distroId = uiViewModel.activeDistroId.value ?: "ubuntu"
+                startActivity(Intent(this, DisplayActivity::class.java).apply {
+                    putExtra("distro_id", distroId)
+                })
             }
         )
     }

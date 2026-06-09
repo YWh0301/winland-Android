@@ -28,6 +28,11 @@ class WinlandAudioServer {
 
         isRunning = true
         initAudioTrack()
+        val fifoDir = File(FIFO_PATH).parentFile
+        if (fifoDir != null && !fifoDir.exists()) {
+            fifoDir.mkdirs()
+            Log.i(TAG, "Created FIFO directory: $fifoDir")
+        }
         serverJob = scope.launch {
             while (isActive && isRunning) {
                 try {

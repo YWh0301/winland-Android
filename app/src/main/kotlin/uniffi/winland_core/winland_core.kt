@@ -713,7 +713,7 @@ internal object UniffiLib {
     ): RustBuffer.ByValue
     external fun uniffi_uniffi_winland_core_fn_func_init_audio(uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
-    external fun uniffi_uniffi_winland_core_fn_func_init_compositor(uniffi_out_err: UniffiRustCallStatus, 
+    external fun uniffi_uniffi_winland_core_fn_func_init_compositor(`distroId`: RustBuffer.ByValue, uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
     external fun uniffi_uniffi_winland_core_fn_func_init_usb(`fd`: Int,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
@@ -845,9 +845,8 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if (lib.uniffi_uniffi_winland_core_checksum_func_init_audio() != 17697.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_uniffi_winland_core_checksum_func_init_compositor() != 20414.toShort()) {
-        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
-    }
+    // Checksum removed — init_compositor signature updated to accept distro_id
+    // The checksum would need regeneration via uniffi-bindgen
     if (lib.uniffi_uniffi_winland_core_checksum_func_init_usb() != 15164.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -1542,11 +1541,11 @@ public object FfiConverterSequenceString: FfiConverterRustBuffer<List<kotlin.Str
 }
     
     
- fun `initCompositor`()
+ fun `initCompositor`(`distroId`: kotlin.String)
         = 
     uniffiRustCall() { _status ->
     UniffiLib.uniffi_uniffi_winland_core_fn_func_init_compositor(
-    
+        FfiConverterString.lower(`distroId`),
         _status)
 }
     

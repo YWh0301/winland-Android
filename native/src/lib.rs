@@ -76,8 +76,8 @@ pub fn get_version() -> String {
 }
 
 #[uniffi::export]
-pub fn init_compositor() {
-    if let Err(error) = compositor::spawn() {
+pub fn init_compositor(distro_id: String) {
+    if let Err(error) = compositor::spawn(&distro_id) {
         log::error!("init_compositor failed: {}", error);
     }
 }

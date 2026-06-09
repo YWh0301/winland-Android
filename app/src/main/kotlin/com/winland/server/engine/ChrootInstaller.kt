@@ -230,9 +230,10 @@ object ChrootInstaller {
                 return Result.failure(IllegalStateException("rootfs is not extracted; press Install first"))
             }
 
-            val setupTarget = File(tmpDir, "setup.sh")
+            val setupName = "setup_${distroId}.sh"
+            val setupTarget = File(tmpDir, setupName)
             setupTarget.parentFile?.mkdirs()
-            context.assets.open("setup.sh").use { input ->
+            context.assets.open(setupName).use { input ->
                 setupTarget.outputStream().use { output ->
                     input.copyTo(output)
                 }
@@ -280,9 +281,9 @@ object ChrootInstaller {
                     /usr/bin/id _apt >/dev/null 2>&1 && /usr/sbin/usermod -G nogroup -g aid_inet _apt || true
                 '
                 
-                # 3. Execution of setup.sh
-                chmod +x $rootfsDir/tmp/setup.sh
-                "${'$'}BB" chroot $rootfsDir /bin/bash /tmp/setup.sh
+                # 3. Execution of distro-specific setup script
+                chmod +x $rootfsDir/tmp/setup_$distroId.sh
+                "${'$'}BB" chroot $rootfsDir /bin/bash /tmp/setup_$distroId.sh
                 
                 touch $profileInstalledDir/${getMarkerInstalled(distroId)}
             """.trimIndent()
@@ -351,7 +352,8 @@ object ChrootInstaller {
             rootfsDir = rootfsDir,
             tmpDir = tmpDir,
             externalStoragePath = externalStoragePath,
-            density = density
+            density = density,
+            distroId = distroId
         )
 
         return try {

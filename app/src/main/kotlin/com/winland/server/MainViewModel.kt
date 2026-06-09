@@ -141,6 +141,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _chrootRuntimeState = MutableStateFlow(ChrootRuntimeState())
     val chrootRuntimeState: StateFlow<ChrootRuntimeState> = _chrootRuntimeState.asStateFlow()
 
+    private val _perDistroChrootState = MutableStateFlow<Map<String, ChrootRuntimeState>>(emptyMap())
+    val perDistroChrootState: StateFlow<Map<String, ChrootRuntimeState>> = _perDistroChrootState.asStateFlow()
+
+    private val _perDistroRefreshSignal = MutableStateFlow(0)
+    val perDistroRefreshSignal: StateFlow<Int> = _perDistroRefreshSignal.asStateFlow()
+
     private var previousCpuSnapshot = readCpuSnapshot()
     private var hasReportedGpuUnsupported = false
 
@@ -340,6 +346,36 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             reason = status.reason,
             isExtracted = status.extracted
         )
+        refreshAllPerDistroStates()
+    }
+
+    fun refreshChrootRuntimeStateForDistro(distroId: String) {
+        val context = getApplication<Application>()
+        val status = ChrootInstaller.getChrootStatus(context, distroId)
+        val state = ChrootRuntimeState(
+            installed = status.installed,
+            ready = status.ready,
+            reason = status.reason,
+            isExtracted = status.extracted
+        )
+        _perDistroChrootState.value = _perDistroChrootState.value + (distroId to state)
+    }
+
+    fun refreshAllPerDistroStates() {
+        val context = getApplication<Application>()
+        val knownIds = _distroUiStates.value.keys
+        if (knownIds.isEmpty()) return
+        val newStates = knownIds.associateWith { id ->
+            val status = ChrootInstaller.getChrootStatus(context, id)
+            ChrootRuntimeState(
+                installed = status.installed,
+                ready = status.ready,
+                reason = status.reason,
+                isExtracted = status.extracted
+            )
+        }
+        _perDistroChrootState.value = newStates
+        _perDistroRefreshSignal.value++
     }
 
     private fun updateDistroState(id: String, transform: (DistroUiState) -> DistroUiState) {

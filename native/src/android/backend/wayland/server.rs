@@ -52,23 +52,101 @@ impl ClientData for WaylandClientState {
     }
 }
 
+// ── xkb_path_accessible ──────────────────────────────────────────────────────
+// SELinux (untrusted_app) may block stat() on app-data paths, causing
+// Path::exists() to return false even though the path is valid.
+// This helper treats PermissionDenied as "accessible" and logs a warning.
+
+fn xkb_path_accessible(path: &str) -> bool {
+    match std::path::Path::new(path).try_exists() {
+        Ok(true) => true,
+        Ok(false) => false,
+        Err(e) => {
+            log::warn!(
+                "XKB: Permission check blocked for '{}' ({}). Assuming path exists.",
+                path, e
+            );
+            true
+        }
+    }
+}
+
 // ── configure_xkb ────────────────────────────────────────────────────────────
 
 #[cfg(feature = "smithay_android")]
-pub fn configure_xkb(data_dir: &str) {
-    let xkb_path = format!("{}/rootfs_ubuntu/usr/share/X11/xkb", data_dir);
+pub fn configure_xkb(data_dir: &str, distro_id: &str) {
+    let xkb_path = format!("{}/rootfs_{}/usr/share/X11/xkb", data_dir, distro_id);
 
-    std::env::set_var("XKB_CONFIG_ROOT", &xkb_path);
-    log::info!("XKB: Configured XKB_CONFIG_ROOT={}", xkb_path);
-
-    if std::path::Path::new(&xkb_path).exists() {
-        log::info!("XKB: Configuration directory found at {}", xkb_path);
-    } else {
-        log::warn!(
-            "XKB: Warning! Path {} does not exist. Check your chroot deployment.",
-            xkb_path
-        );
+    if xkb_path_accessible(&xkb_path) {
+        let rules_path = format!("{}/rules/evdev", xkb_path);
+        match std::fs::File::open(&rules_path) {
+            Ok(_) => {
+                std::env::set_var("XKB_CONFIG_ROOT", &xkb_path);
+                log::info!("XKB: Configured XKB_CONFIG_ROOT={}", xkb_path);
+                return;
+            }
+            Err(e) => {
+                log::warn!(
+                    "XKB: main path blocked or rules/evdev missing at '{}': {}. Trying fallback.",
+                    rules_path, e
+                );
+            }
+        }
     }
+
+    // Fallback: xkeyboard-config (some distros install xkb data here)
+    let share_dir = format!("{}/rootfs_{}/usr/share", data_dir, distro_id);
+    if let Ok(share_entries) = std::fs::read_dir(&share_dir) {
+        for entry in share_entries.flatten() {
+            let name = entry.file_name();
+            let name_str = name.to_string_lossy();
+            if name_str.starts_with("xkeyboard-config") {
+                let xkc_path = entry.path().display().to_string();
+                if xkb_path_accessible(&xkc_path) {
+                    log::info!(
+                        "XKB: X11/xkb inaccessible; using {} instead.",
+                        name_str
+                    );
+                    std::env::set_var("XKB_CONFIG_ROOT", &xkc_path);
+                    return;
+                }
+            }
+        }
+    }
+
+    // Fallback: try other installed distros
+    let data_dir_path = std::path::Path::new(data_dir);
+    if let Ok(entries) = std::fs::read_dir(data_dir_path) {
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let name_str = name.to_string_lossy();
+            if let Some(rest) = name_str.strip_prefix("rootfs_") {
+                let alt_path = format!("{}/usr/share/X11/xkb", entry.path().display());
+                if xkb_path_accessible(&alt_path) {
+                    log::info!(
+                        "XKB: distro '{}' path missing; using fallback from '{}'",
+                        distro_id, rest
+                    );
+                    std::env::set_var("XKB_CONFIG_ROOT", &alt_path);
+                    return;
+                }
+            }
+        }
+    }
+
+    // Last resort: check system paths
+    for alt in &["/system/usr/share/X11/xkb", "/usr/share/X11/xkb"] {
+        if xkb_path_accessible(alt) {
+            log::warn!("XKB: No rootfs xkb found; using system fallback at {}", alt);
+            std::env::set_var("XKB_CONFIG_ROOT", alt);
+            return;
+        }
+    }
+
+    log::error!(
+        "XKB: Path {} does not exist and no fallback found.",
+        xkb_path
+    );
 }
 
 // ── WaylandServer ────────────────────────────────────────────────────────────
@@ -92,10 +170,6 @@ impl WaylandServer {
         socket_dir: &Path,
         render_sender: crossbeam_channel::Sender<Vec<crate::android::backend::smithay_backend::RenderItem>>,
     ) -> Result<Self, String> {
-        let app_context = crate::android::utils::context::get_application_context();
-        let data_dir = app_context.data_dir.to_string_lossy().to_string();
-        configure_xkb(&data_dir);
-
         std::env::set_var("XDG_RUNTIME_DIR", socket_dir);
         std::env::set_var("WAYLAND_DISPLAY", "wayland-0");
 
