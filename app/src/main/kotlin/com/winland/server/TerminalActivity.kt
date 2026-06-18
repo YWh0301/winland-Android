@@ -196,11 +196,10 @@ class TerminalActivity : ComponentActivity(), TerminalSessionClient, TerminalVie
             mkdir -p "${'$'}ROOTFS_DIR${'$'}FILES_DIR/tmp"
             mount -o bind "${'$'}TMP_DIR" "${'$'}ROOTFS_DIR${'$'}FILES_DIR/tmp" 2>/dev/null || true
 
-            chmod 1777 "${'$'}ROOTFS_DIR/tmp" 2>/dev/null || true
-            chmod 1777 "${'$'}TMP_DIR" 2>/dev/null || true
-            chmod 700 "${'$'}ROOTFS_DIR${'$'}FILES_DIR/tmp" 2>/dev/null || true
+chmod 1777 "${'$'}ROOTFS_DIR/tmp" 2>/dev/null || true
+chmod 1777 "${'$'}TMP_DIR" 2>/dev/null || true
 
-            export HOME=/root
+export HOME=/root
             export USER=root
             export TERM=xterm-256color
             export COLORTERM=truecolor

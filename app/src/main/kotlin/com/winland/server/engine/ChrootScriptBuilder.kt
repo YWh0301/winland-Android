@@ -201,7 +201,7 @@ object ChrootScriptBuilder {
 
             ensure_directory $profileInstalledDir
             ensure_directory $tmpDir
-            chmod 0755 $tmpDir
+            chmod 1777 $tmpDir
 
             mkdir -p $rootfsDir/proc $rootfsDir/sys $rootfsDir/dev $rootfsDir/dev/pts $rootfsDir/external_storage
 
@@ -441,6 +441,7 @@ UP_EOF
                 default-server = $PULSE_SERVER_VAL
 CLIENT_EOF
                 mkdir -p /tmp/audio_bridge
+                chmod 777 /tmp/audio_bridge
                 mkfifo -m 666 /tmp/audio_bridge/fifo 2>/dev/null || true
                 exec 3<>/tmp/audio_bridge/fifo
                 cat <<PULSE_EOF > /tmp/pulse.pa
@@ -449,9 +450,12 @@ CLIENT_EOF
                 set-default-sink AndroidSink
 PULSE_EOF
 
+                chmod 755 /run 2>/dev/null || true
+                mkdir -p /var/run/pulse
+                chown pulse:pulse /var/run/pulse 2>/dev/null || chown 101:102 /var/run/pulse 2>/dev/null || true
                 unset PULSE_SERVER
                 rm -f /run/user/0/pulse/pid 2>/dev/null || true
-                pulseaudio -n -F /tmp/pulse.pa --daemonize --realtime=no --disallow-exit --exit-idle-time=-1 --disable-shm=yes --use-pid-file=false --log-target=file:/tmp/pulse-verbose.log -vvvv || true
+                pulseaudio -n -F /tmp/pulse.pa --daemonize --system --realtime=no --disallow-exit --exit-idle-time=-1 --disable-shm=yes --use-pid-file=false --log-target=file:/tmp/pulse-verbose.log -vvvv || true
                 pulse_wait_ok=0
                 j=0
                 while [ "${'$'}j" -lt 10 ]; do

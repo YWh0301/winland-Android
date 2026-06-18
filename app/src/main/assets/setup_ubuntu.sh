@@ -29,7 +29,7 @@ echo "INFO: Setting up Ubuntu desktop"
 apt-get -yq update
 
 install_with_retry \
-    sudo libwayland-client0 labwc xwayland dbus-x11 \
+    sudo wget libwayland-client0 labwc xwayland dbus-x11 \
     pulseaudio pulseaudio-utils wlr-randr
 
 echo "INFO: enabling Xfce Wayland experimental repo"
@@ -38,6 +38,22 @@ add-apt-repository -y ppa:xubuntu-dev/experimental || true
 apt-get -yq update || true
 
 install_with_retry xfce4 xfce4-goodies xfce4-terminal || true
+
+echo "INFO: Installing GPU drivers (Vulkan + Mesa KGSL)..."
+GPU_URL="https://github.com/eirkkk/winland-Android/releases/download/main/gpu.tar.gz"
+GPU_TAR="/tmp/gpu.tar.gz"
+if command -v wget >/dev/null 2>&1; then
+    wget -q "$GPU_URL" -O "$GPU_TAR" || echo "WARN: wget failed"
+elif command -v curl >/dev/null 2>&1; then
+    curl -sL "$GPU_URL" -o "$GPU_TAR" || echo "WARN: curl failed"
+fi
+if [ -f "$GPU_TAR" ] && [ -s "$GPU_TAR" ]; then
+    tar -xzf "$GPU_TAR" -C / --strip-components=1
+    ldconfig 2>/dev/null || true
+    echo "INFO: GPU drivers installed."
+else
+    echo "WARN: GPU tarball download failed. Will use software rendering."
+fi
 
 mkdir -p /etc/xdg/labwc
 cat > /etc/xdg/labwc/autostart <<'EOF_AUTOSTART'
@@ -53,28 +69,32 @@ mkdir -p "$RUNTIME_DIR"
 chmod 700 "$RUNTIME_DIR"
 
 cat >> /root/.bashrc <<'EOF_BASHRC'
-export DISPLAY=:1
+export DISPLAY=:0
 export PULSE_SERVER=127.0.0.1
 export WAYLAND_DISPLAY=wayland-0
 export XDG_RUNTIME_DIR=/tmp
-export XCURSOR_PATH=/usr/share/icons
-export XCURSOR_THEME=default
-export QT_QPA_PLATFORM=wayland
-export GDK_BACKEND=wayland
-export SDL_VIDEODRIVER=wayland
+#export XCURSOR_PATH=/usr/share/icons
+#export XCURSOR_THEME=default
+#export QT_QPA_PLATFORM=wayland
+#export GDK_BACKEND=wayland
+#export SDL_VIDEODRIVER=wayland
+export GDK_BACKEND=x11
+export QT_QPA_PLATFORM=xcb
 export PULSE_SERVER=unix:/tmp/pulse-socket
 EOF_BASHRC
 
 cat >> /etc/profile <<'EOF_PROFILE'
-export DISPLAY=:1
+export DISPLAY=:0
 export PULSE_SERVER=127.0.0.1
 export WAYLAND_DISPLAY=wayland-0
 export XDG_RUNTIME_DIR=/tmp
-export XCURSOR_PATH=/usr/share/icons
-export XCURSOR_THEME=default
-export QT_QPA_PLATFORM=wayland
-export GDK_BACKEND=wayland
-export SDL_VIDEODRIVER=wayland
+#export XCURSOR_PATH=/usr/share/icons
+#export XCURSOR_THEME=default
+#export QT_QPA_PLATFORM=wayland
+#export GDK_BACKEND=wayland
+#export SDL_VIDEODRIVER=wayland
+export GDK_BACKEND=x11
+export QT_QPA_PLATFORM=xcb
 export PULSE_SERVER=unix:/tmp/pulse-socket
 EOF_PROFILE
 

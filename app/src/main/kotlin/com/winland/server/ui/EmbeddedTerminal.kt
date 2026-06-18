@@ -346,9 +346,6 @@ chmod 1777 "${'$'}ROOTFS_DIR/tmp" 2>/dev/null || true
 chmod 1777 "${'$'}TMP_DIR" 2>/dev/null || true
 chmod 1777 "${'$'}ROOTFS_DIR/dev/shm" 2>/dev/null || true
 
-mkdir -p "${'$'}ROOTFS_DIR${'$'}FILES_DIR/tmp" 2>/dev/null
-chmod 700 "${'$'}ROOTFS_DIR${'$'}FILES_DIR/tmp" 2>/dev/null || true
-
 SOCK="${'$'}TMP_DIR/wayland-0"
 LOGF="${'$'}TMP_DIR/winland-socket-fix.log"
 if [ -S "${'$'}SOCK" ]; then
@@ -420,9 +417,6 @@ mount -o bind "${'$'}TMP_DIR" "${'$'}ROOTFS_DIR${'$'}FILES_DIR/tmp" 2>/dev/null 
 chmod 1777 "${'$'}ROOTFS_DIR/tmp" 2>/dev/null || true
 chmod 1777 "${'$'}TMP_DIR" 2>/dev/null || true
 chmod 1777 "${'$'}ROOTFS_DIR/dev/shm" 2>/dev/null || true
-
-mkdir -p "${'$'}ROOTFS_DIR${'$'}FILES_DIR/tmp" 2>/dev/null
-chmod 700 "${'$'}ROOTFS_DIR${'$'}FILES_DIR/tmp" 2>/dev/null || true
 
 SOCK="${'$'}TMP_DIR/wayland-0"
 LOGF="${'$'}TMP_DIR/winland-socket-fix.log"
