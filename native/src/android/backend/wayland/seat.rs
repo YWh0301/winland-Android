@@ -2,6 +2,8 @@ use crate::android::backend::wayland::engine_timing;
 #[cfg(feature = "smithay_android")]
 use crate::android::backend::smithay_backend::RenderItem;
 #[cfg(feature = "smithay_android")]
+use crate::android::backend::wayland::output_management::OutputManagementState;
+#[cfg(feature = "smithay_android")]
 use crate::android::backend::wayland::shell::WindowElement;
 #[cfg(feature = "smithay_android")]
 use libc;
@@ -91,6 +93,24 @@ use smithay::wayland::viewporter::ViewporterState;
 use smithay::wayland::virtual_keyboard::VirtualKeyboardManagerState;
 #[cfg(feature = "smithay_android")]
 use smithay::wayland::xdg_activation::XdgActivationState;
+#[cfg(feature = "smithay_android")]
+use smithay::wayland::keyboard_shortcuts_inhibit::KeyboardShortcutsInhibitState;
+#[cfg(feature = "smithay_android")]
+use smithay::wayland::commit_timing::CommitTimingManagerState;
+#[cfg(feature = "smithay_android")]
+use smithay::wayland::content_type::ContentTypeState;
+#[cfg(feature = "smithay_android")]
+use smithay::wayland::session_lock::SessionLockManagerState;
+#[cfg(feature = "smithay_android")]
+use smithay::wayland::shell::xdg::dialog::XdgDialogState;
+#[cfg(feature = "smithay_android")]
+use smithay::wayland::xdg_toplevel_icon::XdgToplevelIconManager;
+#[cfg(feature = "smithay_android")]
+use smithay::wayland::image_capture_source::{ImageCaptureSourceState, OutputCaptureSourceState};
+#[cfg(feature = "smithay_android")]
+use smithay::wayland::image_copy_capture::ImageCopyCaptureState;
+#[cfg(feature = "smithay_android")]
+use smithay::wayland::tearing_control::TearingControlState;
 #[cfg(feature = "smithay_android")]
 use smithay::wayland::xwayland_shell::XWaylandShellState;
 #[cfg(feature = "smithay_android")]
@@ -266,6 +286,17 @@ pub struct AndroidSeatRuntime {
     pub(crate) ext_workspace_state: ExtWorkspaceManagerState,
     pub(crate) pointer_gestures_state: PointerGesturesState,
     pub(crate) pointer_constraints_state: PointerConstraintsState,
+    pub(crate) keyboard_shortcuts_inhibit_state: KeyboardShortcutsInhibitState,
+    pub(crate) commit_timing_manager_state: CommitTimingManagerState,
+    pub(crate) content_type_state: ContentTypeState,
+    pub(crate) session_lock_state: SessionLockManagerState,
+    pub(crate) xdg_dialog_state: XdgDialogState,
+    pub(crate) xdg_toplevel_icon_manager: XdgToplevelIconManager,
+    pub(crate) image_capture_source_state: ImageCaptureSourceState,
+    pub(crate) output_capture_source_state: OutputCaptureSourceState,
+    pub(crate) image_copy_capture_state: ImageCopyCaptureState,
+    pub(crate) tearing_control_state: TearingControlState,
+    pub(crate) output_management_state: OutputManagementState,
     pub(crate) x11_window_to_surface: HashMap<u32, WlSurface>,
     pub(crate) x11_pending_pings: HashMap<u32, u32>,
 }
@@ -406,6 +437,63 @@ impl AndroidSeatRuntime {
         let pointer_gestures_state = init_stage("pointer_gestures_state", || {
             PointerGesturesState::new::<Self>(display)
         });
+
+        log::info!("SmithayRuntime: init stage=keyboard_shortcuts_inhibit_state");
+        let keyboard_shortcuts_inhibit_state = init_stage("keyboard_shortcuts_inhibit_state", || {
+            KeyboardShortcutsInhibitState::new::<Self>(display)
+        });
+
+        log::info!("SmithayRuntime: init stage=commit_timing_manager_state");
+        let commit_timing_manager_state = init_stage("commit_timing_manager_state", || {
+            CommitTimingManagerState::new::<Self>(display)
+        });
+
+        log::info!("SmithayRuntime: init stage=content_type_state");
+        let content_type_state = init_stage("content_type_state", || {
+            ContentTypeState::new::<Self>(display)
+        });
+
+        log::info!("SmithayRuntime: init stage=session_lock_state");
+        let session_lock_state = init_stage("session_lock_state", || {
+            SessionLockManagerState::new::<Self, _>(display, |_client| true)
+        });
+
+        log::info!("SmithayRuntime: init stage=xdg_dialog_state");
+        let xdg_dialog_state = init_stage("xdg_dialog_state", || {
+            XdgDialogState::new::<Self>(display)
+        });
+
+        log::info!("SmithayRuntime: init stage=xdg_toplevel_icon_manager");
+        let mut xdg_toplevel_icon_manager = init_stage("xdg_toplevel_icon_manager", || {
+            XdgToplevelIconManager::new::<Self>(display)
+        });
+        xdg_toplevel_icon_manager.add_icon_size(16);
+        xdg_toplevel_icon_manager.add_icon_size(32);
+        xdg_toplevel_icon_manager.add_icon_size(64);
+
+        log::info!("SmithayRuntime: init stage=image_capture_source_state");
+        let image_capture_source_state = ImageCaptureSourceState::new();
+
+        log::info!("SmithayRuntime: init stage=output_capture_source_state");
+        let output_capture_source_state = init_stage("output_capture_source_state", || {
+            OutputCaptureSourceState::new::<Self>(display)
+        });
+
+        log::info!("SmithayRuntime: init stage=image_copy_capture_state");
+        let image_copy_capture_state = init_stage("image_copy_capture_state", || {
+            ImageCopyCaptureState::new::<Self>(display)
+        });
+
+        log::info!("SmithayRuntime: init stage=tearing_control_state");
+        let tearing_control_state = init_stage("tearing_control_state", || {
+            TearingControlState::new::<Self>(display)
+        });
+
+        log::info!("SmithayRuntime: init stage=output_management_state");
+        let output_management_state =
+            init_stage("output_management_state", || {
+                OutputManagementState::create_global::<Self>(display)
+            });
 
         log::info!(
             "SmithayRuntime: init stage=output size={}x{}",
@@ -596,6 +684,17 @@ impl AndroidSeatRuntime {
             ext_workspace_state,
             pointer_gestures_state,
             pointer_constraints_state,
+            keyboard_shortcuts_inhibit_state,
+            commit_timing_manager_state,
+            content_type_state,
+            session_lock_state,
+            xdg_dialog_state,
+            xdg_toplevel_icon_manager,
+            image_capture_source_state,
+            output_capture_source_state,
+            image_copy_capture_state,
+            tearing_control_state,
+            output_management_state,
             x11_window_to_surface: HashMap::new(),
             x11_pending_pings: HashMap::new(),
         })

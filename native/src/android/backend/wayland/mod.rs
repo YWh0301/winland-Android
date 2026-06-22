@@ -6,6 +6,7 @@ pub mod handlers;
 pub mod input;
 pub mod input_router;
 pub mod keymap;
+pub mod output_management;
 pub mod runtime_state;
 pub mod seat;
 pub mod seat_injector;

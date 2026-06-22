@@ -1,6 +1,6 @@
 use crate::android::backend::wayland::engine_timing;
 #[cfg(feature = "smithay_android")]
-use crate::android::backend::wayland::input::{InputRouter, RoutedInputEvent, TouchPoint};
+use crate::android::backend::wayland::input::{RoutedInputEvent, TouchPoint};
 #[cfg(feature = "smithay_android")]
 use smithay::backend::input::{Axis, AxisSource, ButtonState, KeyState};
 #[cfg(feature = "smithay_android")]

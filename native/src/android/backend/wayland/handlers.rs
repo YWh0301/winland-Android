@@ -778,3 +778,111 @@ impl DataControlHandler for AndroidSeatRuntime {
         &mut self.data_control_state
     }
 }
+
+// ── Keyboard shortcuts inhibit ──────────────────────────────────────────────────
+
+#[cfg(feature = "smithay_android")]
+use smithay::wayland::keyboard_shortcuts_inhibit::{
+    KeyboardShortcutsInhibitHandler, KeyboardShortcutsInhibitState,
+    KeyboardShortcutsInhibitor,
+};
+
+#[cfg(feature = "smithay_android")]
+impl KeyboardShortcutsInhibitHandler for AndroidSeatRuntime {
+    fn keyboard_shortcuts_inhibit_state(&mut self) -> &mut KeyboardShortcutsInhibitState {
+        &mut self.keyboard_shortcuts_inhibit_state
+    }
+
+    fn new_inhibitor(&mut self, inhibitor: KeyboardShortcutsInhibitor) {
+        inhibitor.activate();
+        log::info!("KeyboardShortcutsInhibit: activated for surface");
+    }
+}
+
+// ── Session lock ─────────────────────────────────────────────────────────────────
+
+#[cfg(feature = "smithay_android")]
+use smithay::wayland::session_lock::{
+    SessionLockHandler, SessionLockManagerState, SessionLocker, LockSurface,
+};
+
+#[cfg(feature = "smithay_android")]
+impl SessionLockHandler for AndroidSeatRuntime {
+    fn lock_state(&mut self) -> &mut SessionLockManagerState {
+        &mut self.session_lock_state
+    }
+
+    fn lock(&mut self, confirmation: SessionLocker) {
+        log::info!("SessionLock: locking screen");
+        confirmation.lock();
+    }
+
+    fn unlock(&mut self) {
+        log::info!("SessionLock: unlocking screen");
+    }
+
+    fn new_surface(&mut self, _surface: LockSurface, _output: WlOutput) {
+        log::info!("SessionLock: new lock surface");
+    }
+}
+
+// ── XDG dialog ───────────────────────────────────────────────────────────────────
+
+#[cfg(feature = "smithay_android")]
+use smithay::wayland::shell::xdg::dialog::XdgDialogHandler;
+
+#[cfg(feature = "smithay_android")]
+impl XdgDialogHandler for AndroidSeatRuntime {}
+
+// ── XDG toplevel icon ────────────────────────────────────────────────────────────
+
+#[cfg(feature = "smithay_android")]
+use smithay::wayland::xdg_toplevel_icon::XdgToplevelIconHandler;
+
+#[cfg(feature = "smithay_android")]
+impl XdgToplevelIconHandler for AndroidSeatRuntime {}
+
+// ── Image capture ─────────────────────────────────────────────────────────────────
+
+#[cfg(feature = "smithay_android")]
+use smithay::wayland::image_capture_source::{
+    ImageCaptureSourceHandler, ImageCaptureSource,
+    OutputCaptureSourceHandler, OutputCaptureSourceState,
+};
+#[cfg(feature = "smithay_android")]
+impl ImageCaptureSourceHandler for AndroidSeatRuntime {
+    fn source_destroyed(&mut self, _source: ImageCaptureSource) {}
+}
+
+#[cfg(feature = "smithay_android")]
+impl OutputCaptureSourceHandler for AndroidSeatRuntime {
+    fn output_capture_source_state(&mut self) -> &mut OutputCaptureSourceState {
+        &mut self.output_capture_source_state
+    }
+
+    fn output_source_created(&mut self, _source: ImageCaptureSource, _output: &Output) {}
+}
+
+// ── Image copy capture ────────────────────────────────────────────────────────────
+
+#[cfg(feature = "smithay_android")]
+use smithay::wayland::image_copy_capture::{
+    ImageCopyCaptureHandler, ImageCopyCaptureState,
+    Session, SessionRef, Frame,
+    BufferConstraints,
+};
+
+#[cfg(feature = "smithay_android")]
+impl ImageCopyCaptureHandler for AndroidSeatRuntime {
+    fn image_copy_capture_state(&mut self) -> &mut ImageCopyCaptureState {
+        &mut self.image_copy_capture_state
+    }
+
+    fn capture_constraints(&mut self, _source: &ImageCaptureSource) -> Option<BufferConstraints> {
+        None
+    }
+
+    fn new_session(&mut self, _session: Session) {}
+
+    fn frame(&mut self, _session: &SessionRef, _frame: Frame) {}
+}
