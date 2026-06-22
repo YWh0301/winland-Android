@@ -49,8 +49,36 @@ elif command -v curl >/dev/null 2>&1; then
 fi
 if [ -f "$GPU_TAR" ] && [ -s "$GPU_TAR" ]; then
     tar -xzf "$GPU_TAR" -C / --strip-components=1
+
+    install_with_retry libxcb-keysyms1
+
+    rm -f /usr/share/vulkan/icd.d/asahi_icd.json \
+          /usr/share/vulkan/icd.d/broadcom_icd.json \
+          /usr/share/vulkan/icd.d/gfxstream_vk_icd.json \
+          /usr/share/vulkan/icd.d/intel_icd.json \
+          /usr/share/vulkan/icd.d/lvp_icd.json \
+          /usr/share/vulkan/icd.d/nouveau_icd.json \
+          /usr/share/vulkan/icd.d/panfrost_icd.json \
+          /usr/share/vulkan/icd.d/radeon_icd.json \
+          /usr/share/vulkan/icd.d/virtio_icd.json \
+          /usr/share/vulkan/icd.d/freedreno_icd.json
+
+    rm -f /usr/lib/aarch64-linux-gnu/libvulkan_asahi.so \
+          /usr/lib/aarch64-linux-gnu/libvulkan_broadcom.so \
+          /usr/lib/aarch64-linux-gnu/libvulkan_gfxstream.so \
+          /usr/lib/aarch64-linux-gnu/libvulkan_intel.so \
+          /usr/lib/aarch64-linux-gnu/libvulkan_lvp.so \
+          /usr/lib/aarch64-linux-gnu/libvulkan_nouveau.so \
+          /usr/lib/aarch64-linux-gnu/libvulkan_panfrost.so \
+          /usr/lib/aarch64-linux-gnu/libvulkan_radeon.so \
+          /usr/lib/aarch64-linux-gnu/libvulkan_virtio.so
+    rm -f /usr/lib/aarch64-linux-gnu/libvulkan.so
+
     ldconfig 2>/dev/null || true
-    echo "INFO: GPU drivers installed."
+
+    ln -sf libvulkan.so.1 /usr/lib/aarch64-linux-gnu/libvulkan.so
+
+    echo "INFO: GPU drivers installed and configured."
 else
     echo "WARN: GPU tarball download failed. Will use software rendering."
 fi
