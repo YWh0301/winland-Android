@@ -57,6 +57,9 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.Alignment
@@ -227,13 +230,19 @@ class DisplayActivity : ComponentActivity() {
 
             val imeCheckView = LocalView.current
             LaunchedEffect(Unit) {
+                var stableSince = 0L
                 while (true) {
+                    delay(50)
                     val imeVisible = ViewCompat.getRootWindowInsets(imeCheckView)
                         ?.isVisible(WindowInsetsCompat.Type.ime()) ?: false
-                    if (imeVisible != keyboardVisible) {
+                    if (imeVisible == keyboardVisible) {
+                        stableSince = 0L
+                    } else if (stableSince == 0L) {
+                        stableSince = SystemClock.uptimeMillis()
+                    } else if (SystemClock.uptimeMillis() - stableSince > 300) {
                         keyboardVisible = imeVisible
+                        stableSince = 0L
                     }
-                    delay(100)
                 }
             }
 
@@ -256,33 +265,34 @@ class DisplayActivity : ComponentActivity() {
                 ) {
                     LinuxDisplay()
 
-                    if (keyboardVisible) {
-                        Column(
-                            modifier = Modifier
-                                .align(Alignment.BottomStart)
-                                .imePadding()
-                        ) {
-                            ExtraKeysBar(
-                                ctrlActive = ctrlActive,
-                                altActive = altActive,
-                                onModifierToggle = { key, active ->
-                                    if (key == "CTRL") {
-                                        _ctrlActive.value = active
-                                        if (NativeBridge.isLoaded()) {
-                                            NativeBridge.sendKeyEvent(KeyEvent.KEYCODE_CTRL_LEFT, active)
-                                        }
-                                        ctrlOneShotPending = active
+                    AnimatedVisibility(
+                        visible = keyboardVisible,
+                        enter = slideInVertically { it },
+                        exit = slideOutVertically { it },
+                        modifier = Modifier
+                            .align(Alignment.BottomStart)
+                            .imePadding()
+                    ) {
+                        ExtraKeysBar(
+                            ctrlActive = ctrlActive,
+                            altActive = altActive,
+                            onModifierToggle = { key, active ->
+                                if (key == "CTRL") {
+                                    _ctrlActive.value = active
+                                    if (NativeBridge.isLoaded()) {
+                                        NativeBridge.sendKeyEvent(KeyEvent.KEYCODE_CTRL_LEFT, active)
                                     }
-                                    if (key == "ALT") {
-                                        _altActive.value = active
-                                        if (NativeBridge.isLoaded()) {
-                                            NativeBridge.sendKeyEvent(KeyEvent.KEYCODE_ALT_LEFT, active)
-                                        }
-                                        altOneShotPending = active
-                                    }
+                                    ctrlOneShotPending = active
                                 }
-                            )
-                        }
+                                if (key == "ALT") {
+                                    _altActive.value = active
+                                    if (NativeBridge.isLoaded()) {
+                                        NativeBridge.sendKeyEvent(KeyEvent.KEYCODE_ALT_LEFT, active)
+                                    }
+                                    altOneShotPending = active
+                                }
+                            }
+                        )
                     }
 
                     // Translucent floating keyboard button — always visible
@@ -499,6 +509,11 @@ class DisplayActivity : ComponentActivity() {
 
                                             if (clientsConnected) {
                                                 Log.i("WinlandDiag", "Guest Start: Wayland clients already connected, desktop is running — skipping startChroot")
+                                                // XWayland is already running from a previous startChroot; notify compositor.
+                                                val x11Dir = context.getUnifiedFilesDir()
+                                                NativeBridge.setX11SocketDir("$x11Dir/tmp")
+                                                NativeBridge.notifyXwaylandReady(0)
+                                                Log.i("WinlandDiag", "Guest Start: notified compositor of existing XWayland display :0")
                                             } else {
                                                 Log.i("WinlandDiag", "Guest Start: Socket detected! Booting Linux desktop ($distroId)...")
                                                 val res = ChrootInstaller.startChroot(context, distroId, context.resources.displayMetrics.density)
@@ -508,6 +523,14 @@ class DisplayActivity : ComponentActivity() {
                                                     withContext(Dispatchers.Main) {
                                                         Toast.makeText(context, "Linux Start Failed: ${err?.message}", Toast.LENGTH_LONG).show()
                                                     }
+                                                } else {
+                                                    // XWayland :0 is started explicitly inside the chroot before startxfce4.
+                                                    // Give it a moment to create the socket before notifying the compositor.
+                                                    val x11Dir = context.getUnifiedFilesDir()
+                                                    delay(2000)
+                                                    NativeBridge.setX11SocketDir("$x11Dir/tmp")
+                                                    NativeBridge.notifyXwaylandReady(0)
+                                                    Log.i("WinlandDiag", "Guest Start: notified compositor of XWayland display :0")
                                                 }
                                             }
                                         } else {

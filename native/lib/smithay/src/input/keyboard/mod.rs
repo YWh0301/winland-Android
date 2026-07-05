@@ -1053,6 +1053,52 @@ impl<D: SeatHandler + 'static> KeyboardHandle<D> {
         }
     }
 
+    /// Send the current modifiers state to the focused client.
+    /// Useful when you need to update modifiers BEFORE sending key events.
+    pub fn send_modifiers(&self, data: &mut D) {
+        let guard = self.arc.internal.lock().unwrap();
+        let mods = guard.mods_state;
+        if let Some((focus, _)) = guard.focus.as_ref() {
+            let seat = self.get_seat(data);
+            focus.modifiers(&seat, data, mods, crate::utils::SERIAL_COUNTER.next_serial());
+        }
+    }
+
+    /// Change the active keyboard layout (group).
+    /// Sends `wl_keyboard.modifiers` to the focused client.
+    pub fn set_active_layout(&self, data: &mut D, layout: Layout) {
+        let guard = self.arc.internal.lock().unwrap();
+        let mut mods = guard.mods_state;
+        let led_mapping = guard.led_mapping;
+        let mut led_state = guard.led_state;
+        let layout_changed = {
+            let mut xkb = guard.xkb.lock().unwrap();
+            let changed = xkb.state.update_mask(
+                mods.serialized.depressed,
+                mods.serialized.latched,
+                mods.serialized.locked,
+                0,
+                0,
+                layout.0,
+            ) != 0;
+            if changed {
+                mods.update_with(&xkb.state);
+                led_state.update_with(&xkb.state, &led_mapping);
+            }
+            changed
+        };
+        drop(guard);
+        let mut guard = self.arc.internal.lock().unwrap();
+        guard.mods_state = mods;
+        if layout_changed {
+            guard.led_state = led_state;
+        }
+        if let Some((focus, _)) = guard.focus.as_ref() {
+            let seat = self.get_seat(data);
+            focus.modifiers(&seat, data, mods, crate::utils::SERIAL_COUNTER.next_serial());
+        }
+    }
+
     /// Set the current focus of this keyboard
     ///
     /// If the new focus is different from the previous one, any previous focus

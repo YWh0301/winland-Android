@@ -36,10 +36,9 @@ install_desktop_packages() {
 }
 
 enable_xfce_wayland_experimental() {
-    echo "INFO: enabling Xfce Wayland experimental repo"
-    apt-get -yq install software-properties-common || true
-    add-apt-repository -y ppa:xubuntu-dev/experimental || true
+    echo "INFO: installing XFCE"
     apt-get -yq update || true
+    apt-get -yq install software-properties-common || true
     apt-get -yq \
         -o Dpkg::Options::="--force-confdef" \
         -o Dpkg::Options::="--force-confold" \

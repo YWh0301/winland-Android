@@ -116,6 +116,7 @@ ROOTFS_DIR="$rootfsDir"
 TMP_DIR="$tmpDir"
 FILES_DIR="$filesDir"
 EXT_STORAGE=/storage/emulated/0
+PULSE_SOCKET_PATH=/tmp/pulse-runtime/native
 
 unmount_safe() {
     umount "${'$'}1" 2>/dev/null || umount -l "${'$'}1" 2>/dev/null || true
@@ -149,6 +150,53 @@ chmod 1777 "${'$'}ROOTFS_DIR/tmp" 2>/dev/null || true
 chmod 1777 "${'$'}TMP_DIR" 2>/dev/null || true
 chmod 1777 "${'$'}ROOTFS_DIR/dev/shm" 2>/dev/null || true
 
+# --- PulseAudio setup (copied from ChrootScriptBuilder) ---
+mkdir -p ${'$'}ROOTFS_DIR/tmp/pulse-runtime ${'$'}ROOTFS_DIR/tmp/audio_bridge ${'$'}ROOTFS_DIR/root/.config/pulse 2>/dev/null || true
+chmod 777 ${'$'}ROOTFS_DIR/tmp/pulse-runtime ${'$'}ROOTFS_DIR/tmp/audio_bridge 2>/dev/null || true
+rm -f ${'$'}ROOTFS_DIR/tmp/pulse-verbose.log ${'$'}ROOTFS_DIR/tmp/pulse-runtime/native ${'$'}ROOTFS_DIR/tmp/pulse.pa 2>/dev/null || true
+mkfifo -m 666 ${'$'}ROOTFS_DIR/tmp/audio_bridge/fifo 2>/dev/null || true
+exec 3<>${'$'}ROOTFS_DIR/tmp/audio_bridge/fifo
+
+cat <<CLIENT_EOF > ${'$'}ROOTFS_DIR/root/.config/pulse/client.conf
+autospawn = no
+default-server = unix:${'$'}PULSE_SOCKET_PATH
+CLIENT_EOF
+
+cat <<PULSE_EOF > ${'$'}ROOTFS_DIR/tmp/pulse.pa
+load-module module-native-protocol-unix auth-anonymous=1 socket=${'$'}PULSE_SOCKET_PATH
+load-module module-pipe-sink sink_name=AndroidSink file=/tmp/audio_bridge/fifo format=s16le channels=2 rate=44100
+set-default-sink AndroidSink
+load-module module-pipe-source source_name=AndroidMic file=/tmp/audio_bridge/mic_fifo format=s16le channels=1 rate=44100
+set-default-source AndroidMic
+PULSE_EOF
+
+if [ ! -S ${'$'}ROOTFS_DIR/tmp/pulse-runtime/native ]; then
+    chroot "${'$'}ROOTFS_DIR" /bin/bash -c '
+        chmod 755 /run 2>/dev/null || true
+        mkdir -p /var/run/pulse
+        chown pulse:pulse /var/run/pulse 2>/dev/null || chown 101:102 /var/run/pulse 2>/dev/null || true
+        unset PULSE_SERVER
+        rm -f /run/user/0/pulse/pid 2>/dev/null || true
+        pulseaudio -n -F /tmp/pulse.pa --daemonize --system --realtime=no --disallow-exit --exit-idle-time=-1 --disable-shm=yes --use-pid-file=false --log-target=file:/tmp/pulse-verbose.log -vvvv || true
+    ' || true
+
+    pulse_wait_ok=0
+    j=0
+    while [ "${'$'}j" -lt 10 ]; do
+        if [ -S ${'$'}ROOTFS_DIR/tmp/pulse-runtime/native ]; then
+            chmod 777 ${'$'}ROOTFS_DIR/tmp/pulse-runtime/native 2>/dev/null || true
+            pulse_wait_ok=1
+            break
+        fi
+        sleep 1
+        j=${'$'}((j + 1))
+    done
+    if [ "${'$'}pulse_wait_ok" -ne 1 ]; then
+        echo "WARN: pulse socket missing at ${'$'}ROOTFS_DIR/tmp/pulse-runtime/native"
+    fi
+fi
+# --- end PulseAudio setup ---
+
 export HOME=/root
 export USER=root
 export LOGNAME=root
@@ -157,6 +205,7 @@ export TERM=xterm-256color
 export PS1='root@winland_$distroId:\w# '
 export XDG_RUNTIME_DIR=${'$'}FILES_DIR/tmp
 export WAYLAND_DISPLAY=wayland-0
+export PULSE_SERVER=unix:${'$'}PULSE_SOCKET_PATH
 exec chroot "${'$'}ROOTFS_DIR" /bin/bash --login
 """
 

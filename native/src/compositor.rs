@@ -202,7 +202,7 @@ pub fn spawn(distro_id: &str) -> Result<(), String> {
                             let logical_w = (effective_size.0 as f32 / scale).round() as i32;
                             let logical_h = (effective_size.1 as f32 / scale).round() as i32;
                             if let Some(server) = wayland_server.as_mut() {
-                                server.runtime.update_output_mode(effective_size.0, effective_size.1);
+                                server.runtime.update_output_mode(effective_size.0, effective_size.1, None);
                             }
                             crate::android::command_channel::set_logical_size(logical_w.max(1), logical_h.max(1));
                         } else {
@@ -273,7 +273,7 @@ pub fn spawn(distro_id: &str) -> Result<(), String> {
                             let logical_h = (h as f32 / scale).round() as i32;
                             crate::android::command_channel::set_logical_size(logical_w.max(1), logical_h.max(1));
                             if let Some(server) = wayland_server.as_mut() {
-                                server.runtime.update_output_mode(w, h);
+                                server.runtime.update_output_mode(w, h, None);
                             }
                         }
                     }

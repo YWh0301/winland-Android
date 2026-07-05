@@ -4,6 +4,7 @@ pub mod engine_timing;
 pub mod event_centralizer;
 pub mod handlers;
 pub mod input;
+pub mod arabic_input;
 pub mod input_router;
 pub mod keymap;
 pub mod output_management;

@@ -500,7 +500,7 @@ PULSE_EOF
                 ln -sfn "${'$'}WINLAND_SOCKET_DIR/wayland-0" "${'$'}XDG_RUNTIME_DIR/wayland-0"
                 log_runtime_guest 'RUN: linked wayland socket into private runtime dir'
 
-                log_runtime_guest 'RUN: launching XFCE desktop session'
+                unset SESSION_MANAGER
 
                 export DISPLAY=:0
                 export WAYLAND_DISPLAY=wayland-0
@@ -508,8 +508,8 @@ PULSE_EOF
                 export XDG_CURRENT_DESKTOP=XFCE
                 export XCURSOR_PATH=/usr/share/icons
                 export XCURSOR_THEME=default
-                export QT_QPA_PLATFORM=wayland
-                export GDK_BACKEND=wayland
+                export QT_QPA_PLATFORM=xcb
+                export GDK_BACKEND=x11
                 export SDL_VIDEODRIVER=wayland
                 export PULSE_SERVER=$PULSE_SERVER_VAL
                 export GDK_SCALE=1
@@ -517,13 +517,33 @@ PULSE_EOF
                 export ELM_SCALE=$desktopScale
                 export QT_AUTO_SCREEN_SCALE_FACTOR=1
                 export QT_SCALE_FACTOR=$desktopScale
+                export LIBGL_ALWAYS_SOFTWARE=1
+                export GALLIUM_DRIVER=llvmpipe
+
+                log_runtime_guest 'RUN: launching Xwayland :0...'
+                mkdir -p /tmp/.X11-unix
+                Xwayland :0 >/tmp/xwayland.log 2>&1 &
+                XWAYLAND_PID=${'$'}!
+                log_runtime_guest "RUN: Xwayland PID=${'$'}XWAYLAND_PID"
+
+                x_wait=0
+                while [ "${'$'}x_wait" -lt 15 ]; do
+                    if [ -S "/tmp/.X11-unix/X0" ]; then
+                        log_runtime_guest "RUN: confirmed X11 socket /tmp/.X11-unix/X0"
+                        break
+                    fi
+                    sleep 1
+                    x_wait=${'$'}((x_wait + 1))
+                done
+                if [ "${'$'}x_wait" -ge 15 ]; then
+                    log_runtime_guest "WARN: X11 socket not found after 15s, continuing anyway"
+                fi
+
+                log_runtime_guest 'RUN: launching XFCE desktop session'
 
                 if command -v startxfce4 >/dev/null 2>&1; then
-                    log_runtime_guest "RUN: launching startxfce4 --wayland..."
-                    run_in_dbus_session startxfce4 --wayland >/tmp/xfce4-wayland.log 2>&1
-                elif command -v labwc >/dev/null 2>&1; then
-                    log_runtime_guest "RUN: launching labwc (startxfce4 not found)..."
-                    run_in_dbus_session labwc -s /etc/xdg/labwc/autostart >/tmp/labwc-wayland.log 2>&1
+                    log_runtime_guest "RUN: launching startxfce4 (X11 via Xwayland)..."
+                    run_in_dbus_session startxfce4 >/tmp/xfce.log 2>&1
                 else
                     log_runtime_guest "FATAL: startxfce4 not found in guest PATH"
                     exit 1

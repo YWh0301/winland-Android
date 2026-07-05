@@ -192,6 +192,39 @@ pub(crate) fn get_latest_error() -> Option<String> {
     }
 }
 
+/// JNI entry point for setting the X11 socket directory (chroot tmp dir).
+/// Called from Kotlin before notifyXwaylandReady to fix the connect path.
+#[no_mangle]
+pub extern "system" fn Java_com_winland_server_NativeBridge_setX11SocketDir(
+    mut env: JNIEnv,
+    _class: JClass,
+    dir: jni::objects::JString,
+) {
+    let dir_str: String = match env.get_string(&dir) {
+        Ok(s) => s.into(),
+        Err(e) => {
+            log::error!("JNI: setX11SocketDir failed to read string: {:?}", e);
+            return;
+        }
+    };
+    log::info!("JNI: setX11SocketDir '{}'", dir_str);
+    crate::android::command_channel::set_x11_socket_dir(dir_str);
+}
+
+/// JNI entry point for notifying the compositor thread of the XWayland display number.
+/// Called from Kotlin after the chroot starts and XWayland has been launched.
+/// The compositor uses this to connect XWayland as a WM client.
+#[no_mangle]
+pub extern "system" fn Java_com_winland_server_NativeBridge_notifyXwaylandReady(
+    _env: JNIEnv,
+    _class: JClass,
+    display_number: jni::sys::jint,
+) {
+    let display = display_number as i32;
+    log::info!("JNI: notifyXwaylandReady called with display :{}", display);
+    crate::android::command_channel::set_xwayland_display(display);
+}
+
 /// JNI entry point for checking if Wayland clients are connected.
 /// Returns 1 if at least one client is connected, 0 otherwise.
 /// Reads a cached value updated by the compositor each frame (no channel round-trip).

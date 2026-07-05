@@ -1,4 +1,6 @@
 #!/bin/bash
+# Winland environment: installs XFCE on Ubuntu in traditional (X11) mode
+# without Wayland compositor dependency. Xwayland :0 provides the X11 display.
 set -e
 
 export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
@@ -30,12 +32,11 @@ apt-get -yq update
 
 install_with_retry \
     sudo wget libwayland-client0 labwc xwayland dbus-x11 \
-    pulseaudio pulseaudio-utils wlr-randr
+    pulseaudio pulseaudio-utils wlr-randr \
+    fonts-noto-core fonts-kacst locales
 
-echo "INFO: enabling Xfce Wayland experimental repo"
-apt-get -yq install software-properties-common || true
-add-apt-repository -y ppa:xubuntu-dev/experimental || true
 apt-get -yq update || true
+apt-get -yq install software-properties-common || true
 
 install_with_retry xfce4 xfce4-goodies xfce4-terminal || true
 
@@ -125,6 +126,10 @@ export GDK_BACKEND=x11
 export QT_QPA_PLATFORM=xcb
 export PULSE_SERVER=unix:/tmp/pulse-socket
 EOF_PROFILE
+
+echo "INFO: Generating Arabic locale..."
+locale-gen ar_SA.UTF-8 || true
+echo 'LANG=ar_SA.UTF-8' >> /etc/default/locale 2>/dev/null || true
 
 echo "INFO: Installing Firefox from Mozilla PPA"
 add-apt-repository -y ppa:mozillateam/ppa || true

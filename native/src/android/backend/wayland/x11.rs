@@ -718,4 +718,10 @@ impl XwmHandler for AndroidSeatRuntime {
         }
         self.render_all();
     }
+
+    fn randr_screen_change_size(&mut self, _xwm: XwmId, new_size: (u16, u16)) {
+        let (w, h) = (new_size.0 as i32, new_size.1 as i32);
+        log::info!("XRandR: screen size changed to {}x{}", w, h);
+        self.update_output_mode(w, h, None);
+    }
 }

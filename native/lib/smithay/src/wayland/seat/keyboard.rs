@@ -252,11 +252,7 @@ pub(crate) fn enter_internal<D: SeatHandler + 'static>(
     // NOTE: Always set focus regardless whether the client actually has the
     // text-input global bound due to clients doing lazy global binding.
     text_input.set_focus(Some(surface.clone()));
-
-    // Only notify on `enter` once we have an actual IME.
-    if input_method.has_instance() {
-        text_input.enter();
-    }
+    text_input.enter();
 }
 
 impl<D: SeatHandler + 'static> KeyboardTarget<D> for WlSurface {

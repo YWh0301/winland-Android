@@ -1,4 +1,4 @@
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, Ordering};
 use std::sync::mpsc;
 use std::sync::{RwLock, OnceLock};
 
@@ -108,6 +108,43 @@ pub fn set_clients_connected(connected: bool) {
 /// Read whether clients are connected (called from JNI / main thread).
 pub fn are_clients_connected() -> bool {
     CLIENTS_CONNECTED.load(Ordering::Relaxed)
+}
+
+/// XWayland display number, set from Kotlin via JNI after the chroot starts.
+/// Initialized to -1 meaning "not yet known".
+static XWAYLAND_DISPLAY: AtomicI32 = AtomicI32::new(-1);
+
+/// X11 socket directory (e.g. "/data/data/com.winland.server/files/tmp"),
+/// set from Kotlin via JNI. Used to construct the XWayland connect path.
+static X11_SOCKET_DIR: OnceLock<RwLock<String>> = OnceLock::new();
+
+pub fn set_x11_socket_dir(dir: String) {
+    let cache = X11_SOCKET_DIR.get_or_init(|| RwLock::new(String::new()));
+    if let Ok(mut guard) = cache.write() {
+        log::info!("X11 socket dir set to '{}'", dir);
+        *guard = dir;
+    }
+}
+
+pub fn get_x11_socket_dir() -> String {
+    let cache = X11_SOCKET_DIR.get_or_init(|| RwLock::new(String::new()));
+    if let Ok(guard) = cache.read() {
+        guard.clone()
+    } else {
+        String::new()
+    }
+}
+
+/// Set the XWayland display number (called from JNI / Kotlin).
+pub fn set_xwayland_display(display: i32) {
+    XWAYLAND_DISPLAY.store(display, Ordering::Release);
+    log::info!("XWayland display number set to :{}", display);
+}
+
+/// Read the XWayland display number (called from compositor thread).
+/// Returns `-1` if not yet set.
+pub fn get_xwayland_display() -> i32 {
+    XWAYLAND_DISPLAY.load(Ordering::Acquire)
 }
 
 // ── Runtime stats cache ───────────────────────────────────────────────────────

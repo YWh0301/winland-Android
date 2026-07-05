@@ -40,7 +40,7 @@ lazy_static = "1.5.0"
 uniffi = { version = "0.31.0", features = ["cli"] }
 anyhow = "1.0.102"
 thiserror = "2.0.18"
-nix = { version = "0.31.2", features = ["fs", "socket", "uio"] }
+nix = { version = "0.31.2", features = ["fs", "socket", "uio", "inotify"] }
 libloading = "0.9.0"
 khronos-egl = { version = "6.0.0", features = ["dynamic"] }
 gl = "0.14.0"

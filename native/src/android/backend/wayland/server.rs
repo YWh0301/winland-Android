@@ -10,6 +10,8 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 #[cfg(feature = "smithay_android")]
 use std::path::{Path, PathBuf};
 #[cfg(feature = "smithay_android")]
+use std::sync::atomic::{AtomicBool, Ordering};
+#[cfg(feature = "smithay_android")]
 use std::sync::Arc;
 #[cfg(feature = "smithay_android")]
 use std::time::Duration;
@@ -25,6 +27,10 @@ use smithay::wayland::compositor::CompositorClientState;
 use smithay::xwayland::X11Wm;
 #[cfg(feature = "smithay_android")]
 use crate::android::backend::wayland::seat::AndroidSeatRuntime;
+
+/// Maximum number of XWayland reconnection attempts (~10s at 500ms intervals).
+#[cfg(feature = "smithay_android")]
+const XWAYLAND_MAX_RECONNECT_ATTEMPTS: u32 = 20;
 
 // ── WaylandClientState ───────────────────────────────────────────────────────
 
@@ -162,6 +168,9 @@ pub struct WaylandServer {
     missing_socket_reported: bool,
     xwayland_event_loop: Option<calloop::EventLoop<'static, AndroidSeatRuntime>>,
     xwayland_reconnect_at: Option<std::time::Instant>,
+    xwayland_reconnect_attempts: u32,
+    xwayland_watch_started: bool,
+    xwayland_connect_trigger: Arc<AtomicBool>,
 }
 
 #[cfg(feature = "smithay_android")]
@@ -306,6 +315,9 @@ impl WaylandServer {
             missing_socket_reported: false,
             xwayland_event_loop: None,
             xwayland_reconnect_at: None,
+            xwayland_reconnect_attempts: 0,
+            xwayland_watch_started: false,
+            xwayland_connect_trigger: Arc::new(AtomicBool::new(false)),
         })
     }
 
@@ -313,11 +325,82 @@ impl WaylandServer {
         &self.socket_name
     }
 
+    pub fn start_xwayland_watcher(&mut self, display_num: i32) {
+        if self.xwayland_watch_started {
+            return;
+        }
+        self.xwayland_watch_started = true;
+
+        let base_dir = crate::android::command_channel::get_x11_socket_dir();
+        if base_dir.is_empty() {
+            log::warn!("XWayland: cannot start watcher, no socket dir set");
+            return;
+        }
+
+        let dir_path = format!("{}/.X11-unix", base_dir);
+        let x_socket_path = format!("{}/X{}", dir_path, display_num);
+
+        // Immediate check: X0 might already exist (race-proof before watcher setup).
+        if std::path::Path::new(&x_socket_path).exists() {
+            log::info!("XWayland: X{} socket already exists, connecting directly", display_num);
+            self.connect_xwayland(display_num);
+            return;
+        }
+
+        log::info!("XWayland: starting inotify watcher on {}", dir_path);
+
+        let inotify = match nix::sys::inotify::Inotify::init(nix::sys::inotify::InitFlags::empty()) {
+            Ok(ino) => ino,
+            Err(e) => {
+                log::error!("XWayland: inotify init failed: {}", e);
+                return;
+            }
+        };
+
+        if let Err(e) = inotify.add_watch(dir_path.as_str(), nix::sys::inotify::AddWatchFlags::IN_CREATE) {
+            log::error!("XWayland: inotify add_watch on {} failed: {}", dir_path, e);
+            return;
+        }
+
+        let trigger = self.xwayland_connect_trigger.clone();
+        let target = format!("X{}", display_num);
+
+        std::thread::Builder::new()
+            .name("xwayland-watcher".into())
+            .spawn(move || {
+                loop {
+                    match inotify.read_events() {
+                        Ok(events) => {
+                            for event in &events {
+                                if let Some(ref name) = event.name {
+                                    if name.to_string_lossy() == target {
+                                        log::info!("XWayland: inotify detected {} creation", target);
+                                        trigger.store(true, Ordering::SeqCst);
+                                        return;
+                                    }
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            log::error!("XWayland: inotify read error: {}", e);
+                            return;
+                        }
+                    }
+                }
+            })
+            .ok();
+    }
+
     pub fn connect_xwayland(&mut self, display_num: i32) {
         if self.xwayland_event_loop.is_some() {
             return;
         }
-        let socket_path = format!("/tmp/.X11-unix/X{}", display_num);
+        let base_dir = crate::android::command_channel::get_x11_socket_dir();
+        let socket_path = if base_dir.is_empty() {
+            format!("/tmp/.X11-unix/X{}", display_num)
+        } else {
+            format!("{}/.X11-unix/X{}", base_dir, display_num)
+        };
         let stream = match UnixStream::connect(&socket_path) {
             Ok(s) => s,
             Err(e) => {
@@ -325,11 +408,25 @@ impl WaylandServer {
                 return;
             }
         };
-        let (client, dh) = match self.runtime.xwayland_client.clone() {
-            Some(c) => (c, self.runtime.display_handle.clone()),
-            None => {
-                log::warn!("XWayland: xwayland_client not ready, will retry");
-                return;
+        // Retry xwayland_client with backoff — there's a tiny race between
+        // XWayland creating the X11 socket and registering as a Wayland client.
+        let (client, dh) = loop {
+            if let Some(c) = self.runtime.xwayland_client.clone() {
+                break (c, self.runtime.display_handle.clone());
+            }
+            log::warn!("XWayland: xwayland_client not ready, short retry...");
+            std::thread::sleep(Duration::from_millis(100));
+            if self.runtime.xwayland_client.is_none() {
+                // After ~300ms total, the race is almost certainly a real failure.
+                // Wait one more beat then give up (reconnect timer handles retry).
+                std::thread::sleep(Duration::from_millis(200));
+            }
+            match self.runtime.xwayland_client.clone() {
+                Some(c) => break (c, self.runtime.display_handle.clone()),
+                None => {
+                    log::warn!("XWayland: xwayland_client not ready after retries, giving up");
+                    return;
+                }
             }
         };
         let event_loop: calloop::EventLoop<'static, AndroidSeatRuntime> =
@@ -445,9 +542,18 @@ impl WaylandServer {
         }
 
         if self.xwayland_event_loop.is_none() {
-            if let Ok(s) = std::env::var("WINLAND_XWAYLAND_DISPLAY") {
-                if let Ok(n) = s.parse::<i32>() {
-                    self.connect_xwayland(n);
+            let display = crate::android::command_channel::get_xwayland_display();
+            if display >= 0 {
+                // Start the inotify watcher on first notification from Kotlin.
+                // On subsequent frames the watcher is either already running or
+                // connect_xwayland succeeded (xwayland_event_loop is Some).
+                if !self.xwayland_watch_started {
+                    self.start_xwayland_watcher(display);
+                }
+                // If inotify triggered (X0 created), attempt connection once.
+                if self.xwayland_connect_trigger.load(Ordering::Acquire) {
+                    self.xwayland_connect_trigger.store(false, Ordering::Release);
+                    self.connect_xwayland(display);
                 }
             }
         }
@@ -465,10 +571,32 @@ impl WaylandServer {
         if let Some(reconnect_at) = self.xwayland_reconnect_at {
             if std::time::Instant::now() >= reconnect_at {
                 self.xwayland_reconnect_at = None;
-                if let Ok(display_str) = std::env::var("WINLAND_XWAYLAND_DISPLAY") {
-                    if let Ok(n) = display_str.parse::<i32>() {
-                        log::info!("XWayland: attempting reconnection to display :{}", n);
-                        self.connect_xwayland(n);
+                let display = crate::android::command_channel::get_xwayland_display();
+                if display < 0 {
+                    log::warn!(
+                        "XWayland: reconnect attempt {}/{} skipped — display not yet set",
+                        self.xwayland_reconnect_attempts + 1,
+                        XWAYLAND_MAX_RECONNECT_ATTEMPTS,
+                    );
+                } else {
+                    self.xwayland_reconnect_attempts += 1;
+                    if self.xwayland_reconnect_attempts > XWAYLAND_MAX_RECONNECT_ATTEMPTS {
+                        log::error!(
+                            "XWayland: giving up after {} reconnection attempts",
+                            XWAYLAND_MAX_RECONNECT_ATTEMPTS,
+                        );
+                        self.xwayland_reconnect_at = None;
+                    } else {
+                        log::info!(
+                            "XWayland: reconnect attempt {}/{} to display :{}",
+                            self.xwayland_reconnect_attempts,
+                            XWAYLAND_MAX_RECONNECT_ATTEMPTS,
+                            display,
+                        );
+                        self.connect_xwayland(display);
+                        if self.xwayland_event_loop.is_some() {
+                            self.xwayland_reconnect_attempts = 0;
+                        }
                     }
                 }
             }

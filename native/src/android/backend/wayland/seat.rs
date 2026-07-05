@@ -118,6 +118,10 @@ use smithay::xwayland::xwm::ResizeEdge;
 #[cfg(feature = "smithay_android")]
 use smithay::xwayland::X11Wm;
 #[cfg(feature = "smithay_android")]
+use smithay::xwayland::XWaylandClientData;
+#[cfg(feature = "smithay_android")]
+use crate::android::backend::wayland::server::WaylandClientState;
+#[cfg(feature = "smithay_android")]
 use std::collections::{HashMap, HashSet};
 #[cfg(feature = "smithay_android")]
 use std::sync::atomic::AtomicBool;
@@ -577,16 +581,16 @@ impl AndroidSeatRuntime {
             }
         }
 
-        let xkb_keymap = XkbKeymap::new_from_names(&context, "evdev", "pc105", "us", "", None, 0)
+        let xkb_keymap = XkbKeymap::new_from_names(&context, "evdev", "pc105", "us,ara", "", None, 0)
             .ok_or_else(|| {
-            "failed to load default xkb keymap (tried evdev/pc105/us fallback)".to_string()
+            "failed to load default xkb keymap (tried evdev/pc105/us,ara fallback)".to_string()
         })?;
 
         let keyboard = Some(
-            seat.add_keyboard(XkbConfig::default(), 200, 25)
+            seat.add_keyboard(XkbConfig { layout: "us,ara", ..Default::default() }, 200, 25)
                 .expect("failed to add keyboard"),
         );
-        log::info!("SmithayRuntime: xkb initialized successfully with evdev/pc105/us");
+        log::info!("SmithayRuntime: xkb initialized successfully with evdev/pc105/us,ara");
 
         log::info!("SmithayRuntime: init stage=pointer");
         let pointer = init_stage("pointer", || seat.add_pointer());
@@ -732,17 +736,19 @@ impl ExtWorkspaceHandler for AndroidSeatRuntime {
 }
 
 impl AndroidSeatRuntime {
-    pub fn update_output_mode(&mut self, width: i32, height: i32) {
+    pub fn update_output_mode(&mut self, width: i32, height: i32, scale_override: Option<f64>) {
         // wl_output.mode always reports surface_size (the full framebuffer).
-        // Only the scale changes based on resolution preset chips.
+        // Use scale_override from wlr-output-management if provided,
+        // otherwise fall back to the Android-side cached scale.
         self.physical_size = crate::android::command_channel::get_physical_size();
         self.screen_size = (width, height);
-        let scale = compute_dpi_scale();
+        let scale = scale_override.unwrap_or_else(compute_dpi_scale);
         log::info!(
-            "SmithayRuntime: updating output mode to {}x{} scale={} physical={:?}",
+            "SmithayRuntime: updating output mode to {}x{} scale={} (override={:?}) physical={:?}",
             width,
             height,
             scale,
+            scale_override,
             self.physical_size
         );
         let mode = OutputMode {
@@ -755,6 +761,18 @@ impl AndroidSeatRuntime {
             Some(Scale::Fractional(scale)),
             None,
         );
+        // Propagate the new scale to XWayland's client_scale so X11Wm
+        // converts X11 coordinates correctly (not locked at 1.0).
+        if let Some(ref xc) = self.xwayland_client {
+            let cs = xc.get_data::<WaylandClientState>()
+                .map(|s| &s.compositor_state)
+                .or_else(|| xc.get_data::<XWaylandClientData>()
+                    .map(|d| &d.compositor_state));
+            if let Some(c) = cs {
+                c.set_client_scale(scale);
+                log::info!("XWayland: client_scale set to {}", scale);
+            }
+        }
         self.output.set_preferred(mode);
         self.space.map_output(&self.output, (0, 0));
         let pp = self.output.physical_properties();
@@ -766,6 +784,7 @@ impl AndroidSeatRuntime {
             pp.size.h,
             self.output.current_mode()
         );
+        self.render_all();
     }
 
     pub(crate) fn usable_screen_size(&self) -> (i32, i32) {

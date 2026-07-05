@@ -251,7 +251,7 @@ impl smithay::wayland::Dispatch2<ZwlrOutputModeV1, AndroidSeatRuntime> for ModeU
 impl smithay::wayland::Dispatch2<ZwlrOutputConfigurationV1, AndroidSeatRuntime> for ConfigUserData {
     fn request(
         &self,
-        _state: &mut AndroidSeatRuntime,
+        state: &mut AndroidSeatRuntime,
         _client: &Client,
         resource: &ZwlrOutputConfigurationV1,
         request: zwlr_output_configuration_v1::Request,
@@ -273,49 +273,95 @@ impl smithay::wayland::Dispatch2<ZwlrOutputConfigurationV1, AndroidSeatRuntime> 
             }
             zwlr_output_configuration_v1::Request::Apply => {
                 log::info!("SmithayRuntime: wlr-output-management apply");
+
+                let mut new_mode: Option<(i32, i32, i32)> = None;
+                let mut new_scale: Option<f64> = None;
+                let mut new_position: Option<(i32, i32)> = None;
+
                 for action in self.head_rx.try_iter() {
                     match action {
                         HeadAction::SetCustomMode(w, h, refresh) => {
                             log::info!("  -> set_custom_mode {}x{}@{}", w, h, refresh);
+                            new_mode = Some((w, h, refresh));
                         }
                         HeadAction::SetPosition(x, y) => {
                             log::info!("  -> set_position {},{}", x, y);
+                            new_position = Some((x, y));
                         }
                         HeadAction::SetTransform(t) => {
-                            log::info!("  -> set_transform {}", t);
+                            log::info!("  -> set_transform {} (ignored, fixed Normal)", t);
                         }
                         HeadAction::SetScale(s) => {
                             log::info!("  -> set_scale {}", s);
+                            new_scale = Some(s);
                         }
                         HeadAction::SetAdaptiveSync(enabled) => {
-                            log::info!("  -> set_adaptive_sync {}", enabled);
+                            log::info!("  -> set_adaptive_sync {} (ignored)", enabled);
                         }
                     }
                 }
+
+                // Determine effective resolution: use new if provided, otherwise current
+                let (w, h) = match new_mode {
+                    Some((w, h, _refresh)) => (w, h),
+                    None => {
+                        let current = state.output.current_mode().unwrap_or(smithay::output::Mode {
+                            size: (1080, 2296).into(),
+                            refresh: 60000,
+                        });
+                        (current.size.w, current.size.h)
+                    }
+                };
+
+                log::info!(
+                    "  -> applying mode {}x{} scale={:?} position={:?}",
+                    w, h, new_scale, new_position,
+                );
+
+                state.update_output_mode(w, h, new_scale);
+                // TODO: apply position (state.space.map_output) when multi-output is supported
+
                 resource.succeeded();
             }
             zwlr_output_configuration_v1::Request::Test => {
                 log::info!("SmithayRuntime: wlr-output-management test");
+
+                let mut valid = true;
                 for action in self.head_rx.try_iter() {
                     match action {
                         HeadAction::SetCustomMode(w, h, refresh) => {
-                            log::info!("  -> test set_custom_mode {}x{}@{}", w, h, refresh);
+                            if w <= 0 || h <= 0 || refresh <= 0 {
+                                log::warn!("  -> test FAILED: invalid mode {}x{}@{}", w, h, refresh);
+                                valid = false;
+                            } else {
+                                log::info!("  -> test set_custom_mode {}x{}@{} (valid)", w, h, refresh);
+                            }
                         }
                         HeadAction::SetPosition(x, y) => {
-                            log::info!("  -> test set_position {},{}", x, y);
+                            log::info!("  -> test set_position {},{} (valid)", x, y);
                         }
                         HeadAction::SetTransform(t) => {
-                            log::info!("  -> test set_transform {}", t);
+                            log::info!("  -> test set_transform {} (valid, ignored)", t);
                         }
                         HeadAction::SetScale(s) => {
-                            log::info!("  -> test set_scale {}", s);
+                            if s <= 0.0 || s > 5.0 {
+                                log::warn!("  -> test FAILED: invalid scale {}", s);
+                                valid = false;
+                            } else {
+                                log::info!("  -> test set_scale {} (valid)", s);
+                            }
                         }
                         HeadAction::SetAdaptiveSync(enabled) => {
-                            log::info!("  -> test set_adaptive_sync {}", enabled);
+                            log::info!("  -> test set_adaptive_sync {} (ignored)", enabled);
                         }
                     }
                 }
-                resource.succeeded();
+
+                if valid {
+                    resource.succeeded();
+                } else {
+                    resource.failed();
+                }
             }
             zwlr_output_configuration_v1::Request::Destroy => {}
             _ => {}

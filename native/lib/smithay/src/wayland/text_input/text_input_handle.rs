@@ -150,6 +150,25 @@ impl TextInputHandle {
         });
     }
 
+    /// Commit `text` directly to all `zwp_text_input_v3` instances owned by the
+    /// focused client, bypassing the IME activation gate.
+    ///
+    /// Calls `commit_string` then `done` with the per-instance serial
+    /// (incremented on each client `commit`) so that the client's
+    /// serial‑matching check passes.  The caller (or the keyboard‑focus path)
+    /// MUST have sent `enter` to the instance first — clients silently drop
+    /// text‑input events when unfocused.
+    pub fn commit_text_direct(&self, text: &str) -> bool {
+        let mut inner = self.inner.lock().unwrap();
+        let mut committed = false;
+        inner.with_focused_client_all_text_inputs(|ti, _surface, serial| {
+            ti.commit_string(Some(text.to_string()));
+            ti.done(serial);
+            committed = true;
+        });
+        committed
+    }
+
     /// Access the active text-input instance for the currently focused surface.
     pub fn with_active_text_input<F>(&self, mut f: F)
     where

@@ -21,6 +21,7 @@ public final class TerminalRenderer {
     final int mTextSize;
     final Typeface mTypeface;
     private final Paint mTextPaint = new Paint();
+    private Typeface mFallbackTypeface;
 
     /** The width of a single mono spaced character obtained by {@link Paint#measureText(String)} on a single 'X'. */
     final float mFontWidth;
@@ -51,6 +52,27 @@ public final class TerminalRenderer {
             sb.setCharAt(0, (char) i);
             asciiMeasures[i] = mTextPaint.measureText(sb, 0, 1);
         }
+
+        mFallbackTypeface = findArabicFallbackTypeface(textSize, typeface);
+    }
+
+    private static Typeface findArabicFallbackTypeface(int textSize, Typeface primary) {
+        Paint p = new Paint();
+        p.setTypeface(primary);
+        p.setTextSize(textSize);
+        if (p.measureText("\u0627") > 0) return null;
+
+        String[] candidates = {"naskh", "arabic", "noto_naskh", "sans-serif"};
+        for (String name : candidates) {
+            try {
+                Typeface tf = Typeface.create(name, Typeface.NORMAL);
+                if (tf != null && !tf.equals(primary)) {
+                    p.setTypeface(tf);
+                    if (p.measureText("\u0627") > 0) return tf;
+                }
+            } catch (Exception ignored) {}
+        }
+        return null;
     }
 
     /** Render the terminal to a canvas with at a specified row scroll, and an optional rectangular selection. */
@@ -232,8 +254,15 @@ public final class TerminalRenderer {
             mTextPaint.setStrikeThruText(strikeThrough);
             mTextPaint.setColor(foreColor);
 
-            // The text alignment is the default Paint.Align.LEFT.
+            Typeface savedTypeface = null;
+            if (mFallbackTypeface != null) {
+                int end = startCharIndex + runWidthChars;
+                for (int i = startCharIndex; i < end; i++) {
+                    if (text[i] > 0x7F) { savedTypeface = mTextPaint.getTypeface(); mTextPaint.setTypeface(mFallbackTypeface); break; }
+                }
+            }
             canvas.drawTextRun(text, startCharIndex, runWidthChars, startCharIndex, runWidthChars, left, y - mFontLineSpacingAndAscent, false, mTextPaint);
+            if (savedTypeface != null) mTextPaint.setTypeface(savedTypeface);
         }
 
         if (savedMatrix) canvas.restore();

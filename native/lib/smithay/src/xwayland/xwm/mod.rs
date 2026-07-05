@@ -550,6 +550,12 @@ pub trait XwmHandler {
         let _ = (xwm, output_name);
     }
 
+    /// The screen size changed via XRandR (e.g. xrandr --mode).
+    /// `new_size` contains the new screen dimensions in pixels.
+    fn randr_screen_change_size(&mut self, xwm: XwmId, new_size: (u16, u16)) {
+        let _ = (xwm, new_size);
+    }
+
     /// Application requests enabling "show desktop" mode
     fn show_desktop_request(&mut self, xwm: XwmId) {
         let _ = xwm;
@@ -1048,11 +1054,21 @@ impl X11Wm {
         self.id
     }
 
+    /// Access the underlying X11 connection
+    pub fn conn(&self) -> &Arc<RustConnection> {
+        &self.conn
+    }
+
     /// Whether or not the XSYNC extension is present
     ///
     /// This can be used to tell if the `_NET_WM_SYNC_REQUEST` protocol can be used.
     pub fn sync_supported(&self) -> bool {
         self.servertime_counter.is_some()
+    }
+
+    /// Root window of the default screen
+    pub fn root_window(&self) -> u32 {
+        self.screen.root
     }
 
     /// Raises a window in the internal X11 state
@@ -2720,6 +2736,9 @@ where
             xwm.screen.height_in_millimeters = n.mheight;
 
             xwm.dnd.update_screen(&xwm.screen)?;
+
+            drop(_guard);
+            state.randr_screen_change_size(xwm_id, (n.width, n.height));
         }
         Event::SyncAlarmNotify(n) => {
             if let Some(surface) = xwm
