@@ -318,6 +318,12 @@ pub fn spawn(distro_id: &str) -> Result<(), String> {
             }
 
             if let Some(server) = wayland_server.as_mut() {
+                // Check gesture timer (long-press detection)
+                if let Some(event) = input_router.poll_timer() {
+                    server.runtime.inject_routed_event(&event);
+                    crate::android::backend::wayland::seat_injector::record_injection(&event);
+                }
+
                 server.pump();
                 crate::android::command_channel::set_clients_connected(server.connected_client_count() > 0);
                 server.runtime.render_all();

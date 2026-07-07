@@ -1,5 +1,5 @@
 #[cfg(feature = "smithay_android")]
-use crate::android::backend::wayland::seat::AndroidSeatRuntime;
+use crate::android::backend::wayland::seat::{AndroidSeatRuntime, WinlandInputMode};
 #[cfg(feature = "smithay_android")]
 use crate::android::backend::wayland::server::WaylandClientState;
 #[cfg(feature = "smithay_android")]
@@ -105,7 +105,15 @@ impl SeatHandler for AndroidSeatRuntime {
         }
         self.cursor_status = match image {
             CursorImageStatus::Hidden => None,
-            other => Some(other),
+            other => {
+                // Touch mode: never show the cursor — it would distract
+                // from the touch-scroll / tap gesture experience.
+                if self.current_input_mode == WinlandInputMode::Touch {
+                    None
+                } else {
+                    Some(other)
+                }
+            }
         };
     }
 
@@ -524,11 +532,6 @@ impl XdgShellHandler for AndroidSeatRuntime {
         if self.popup_grab_surface.as_ref() == Some(&wl) {
             self.popup_grab_active = false;
             self.popup_grab_surface = None;
-        }
-
-        if self.gesture_surface.as_ref() == Some(&wl) {
-            self.gesture_target = None;
-            self.gesture_surface = None;
         }
 
         if self.focused_surface.as_ref() == Some(&wl) {

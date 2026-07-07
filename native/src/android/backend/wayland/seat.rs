@@ -114,8 +114,6 @@ use smithay::wayland::tearing_control::TearingControlState;
 #[cfg(feature = "smithay_android")]
 use smithay::wayland::xwayland_shell::XWaylandShellState;
 #[cfg(feature = "smithay_android")]
-use smithay::xwayland::xwm::ResizeEdge;
-#[cfg(feature = "smithay_android")]
 use smithay::xwayland::X11Wm;
 #[cfg(feature = "smithay_android")]
 use smithay::xwayland::XWaylandClientData;
@@ -183,13 +181,6 @@ fn compute_dpi_scale() -> f64 {
     // logical_size always equals surface_size, so the scale is purely
     // a UI-density multiplier from the client's perspective.
     crate::android::command_channel::get_scale() as f64
-}
-
-#[cfg(feature = "smithay_android")]
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub(crate) enum GestureTarget {
-    Move,
-    Resize(ResizeEdge),
 }
 
 // ── AndroidSeatRuntime ───────────────────────────────────────────────────────
@@ -265,10 +256,10 @@ pub struct AndroidSeatRuntime {
     pub(crate) xwayland_client: Option<Client>,
     pub(crate) popup_grab_active: bool,
     pub(crate) popup_grab_surface: Option<WlSurface>,
-    pub(crate) gesture_target: Option<GestureTarget>,
-    pub(crate) gesture_surface: Option<WlSurface>,
-    pub(crate) gesture_origin: (f32, f32),
     pub(crate) relative_sensitivity: f32,
+    pub(crate) mouse_last_pos: (f32, f32),
+    pub(crate) pointer_button_pressed: bool,
+    pub(crate) touch_two_finger_tap_active: bool,
     pub(crate) physical_size: (i32, i32),
     pub(crate) screen_size: (i32, i32),
     pub(crate) foreign_toplevel_handles: HashMap<WlSurface, ForeignToplevelHandle>,
@@ -281,7 +272,6 @@ pub struct AndroidSeatRuntime {
     pub(crate) clipboard_text: Arc<Mutex<String>>,
     pub(crate) last_activation_serial: Option<Serial>,
     pub(crate) trackpad_anchor: Option<(f32, f32)>,
-    pub(crate) pending_compositor_move: bool,
     pub(crate) trackpad_moved: bool,
     pub(crate) trackpad_tap_fingers: Vec<i32>,
     pub(crate) trackpad_hold_start_ms: u32,
@@ -655,12 +645,12 @@ impl AndroidSeatRuntime {
             }),
             x11_wm: None,
             xwayland_client: None,
-            gesture_target: None,
-            gesture_surface: None,
-            gesture_origin: (0.0, 0.0),
             popup_grab_active: false,
             popup_grab_surface: None,
             relative_sensitivity: 1.0,
+            mouse_last_pos: (0.0, 0.0),
+            pointer_button_pressed: false,
+            touch_two_finger_tap_active: false,
             physical_size: crate::android::command_channel::get_physical_size(),
             screen_size: (width, height),
             foreign_toplevel_handles: HashMap::new(),
@@ -679,7 +669,6 @@ impl AndroidSeatRuntime {
             clipboard_text: Arc::new(Mutex::new(String::new())),
             last_activation_serial: None,
             trackpad_anchor: None,
-            pending_compositor_move: false,
             trackpad_moved: false,
             trackpad_tap_fingers: Vec::new(),
             trackpad_hold_start_ms: 0,
@@ -907,15 +896,6 @@ impl AndroidSeatRuntime {
         {
             self.popup_grab_active = false;
             self.popup_grab_surface = None;
-        }
-
-        if self
-            .gesture_surface
-            .as_ref()
-            .map_or(false, |s| !s.is_alive())
-        {
-            self.gesture_target = None;
-            self.gesture_surface = None;
         }
 
         self.swipe_starts.retain(|_, v| {

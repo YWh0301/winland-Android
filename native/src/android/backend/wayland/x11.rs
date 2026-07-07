@@ -21,7 +21,7 @@ use smithay::xwayland::XwmHandler;
 #[cfg(feature = "smithay_android")]
 use smithay::xwayland::xwm::{WmWindowType, XwmId, ResizeEdge, Reorder, WmWindowProperty, X11Surface};
 #[cfg(feature = "smithay_android")]
-use crate::android::backend::wayland::seat::{AndroidSeatRuntime, GestureTarget};
+use crate::android::backend::wayland::seat::AndroidSeatRuntime;
 #[cfg(feature = "smithay_android")]
 use crate::android::backend::wayland::server::WaylandClientState;
 #[cfg(feature = "smithay_android")]
@@ -236,10 +236,6 @@ impl XwmHandler for AndroidSeatRuntime {
             self.minimized.remove(&wl);
             self.maximize_restore.remove(&wl);
             self.fullscreen_restore.remove(&wl);
-            if self.gesture_surface.as_ref() == Some(&wl) {
-                self.gesture_target = None;
-                self.gesture_surface = None;
-            }
             if self.focused_surface.as_ref() == Some(&wl) {
                 self.focused_surface = None;
                 let candidate = self.choose_focus_candidate();
@@ -264,10 +260,6 @@ impl XwmHandler for AndroidSeatRuntime {
             self.minimized.remove(&wl);
             self.maximize_restore.remove(&wl);
             self.fullscreen_restore.remove(&wl);
-            if self.gesture_surface.as_ref() == Some(&wl) {
-                self.gesture_target = None;
-                self.gesture_surface = None;
-            }
             if self.popup_grab_surface.as_ref() == Some(&wl) {
                 self.popup_grab_active = false;
                 self.popup_grab_surface = None;
@@ -361,21 +353,13 @@ impl XwmHandler for AndroidSeatRuntime {
         _xwm: XwmId,
         window: X11Surface,
         _button: u32,
-        resize_edge: ResizeEdge,
+        _resize_edge: ResizeEdge,
     ) {
-        if let Some(wl) = window.wl_surface() {
-            self.gesture_target = Some(GestureTarget::Resize(resize_edge));
-            self.gesture_surface = Some(wl);
-        }
-        log::debug!("XWayland: resize_request id={} edge={:?}", window.window_id(), resize_edge);
+        log::debug!("XWayland: resize_request id={} (X11Wm disabled, ignored)", window.window_id());
     }
 
     fn move_request(&mut self, _xwm: XwmId, window: X11Surface, _button: u32) {
-        if let Some(wl) = window.wl_surface() {
-            self.gesture_target = Some(GestureTarget::Move);
-            self.gesture_surface = Some(wl);
-        }
-        log::debug!("XWayland: move_request id={}", window.window_id());
+        log::debug!("XWayland: move_request id={} (X11Wm disabled, ignored)", window.window_id());
     }
 
     fn maximize_request(&mut self, _xwm: XwmId, window: X11Surface) {
@@ -562,8 +546,6 @@ impl XwmHandler for AndroidSeatRuntime {
             self.maximize_restore.remove(wl);
             self.unmanaged_surfaces.retain(|s| s != wl);
         }
-        self.gesture_target = None;
-        self.gesture_surface = None;
         self.focused_surface = None;
         log::warn!("XWayland: X11 WM disconnected, cleaned up {} surfaces", surfaces.len());
     }

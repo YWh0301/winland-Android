@@ -38,7 +38,9 @@ class EmbeddedTerminal(private val context: Context) : TerminalSessionClient, Te
     private var shellPid: Int = -1
     private var terminalDistroId: String = "ubuntu"
     private var ptmxFixAttempted = false
+    var currentLang: String = "en_US.UTF-8"
     var onSessionStateChanged: ((Boolean) -> Unit)? = null
+    var onLangChanged: ((String) -> Unit)? = null
     val currentDistroId: String get() = terminalDistroId
     var barCtrlActive: Boolean = false
     var barAltActive: Boolean = false
@@ -148,7 +150,7 @@ class EmbeddedTerminal(private val context: Context) : TerminalSessionClient, Te
             val chrootScriptFile = java.io.File(physicalFilesDir, "chroot-dashboard_$id.sh")
             val chrootCommand = when (id) {
                 "kali" -> buildChrootCommandKali(rootfsDir, unifiedFilesDir)
-                else -> buildChrootCommandUbuntu(rootfsDir, unifiedFilesDir)
+                else -> buildChrootCommandGeneric(rootfsDir, unifiedFilesDir)
             }
             chrootScriptFile.writeText(chrootCommand)
             chrootScriptFile.setExecutable(true, false)
@@ -166,7 +168,7 @@ class EmbeddedTerminal(private val context: Context) : TerminalSessionClient, Te
             "TERM=xterm-256color",
             "HOME=/root",
             "COLORTERM=truecolor",
-            "LANG=en_US.UTF-8"
+            "LANG=$currentLang"
         )
 
         try {
@@ -203,6 +205,12 @@ class EmbeddedTerminal(private val context: Context) : TerminalSessionClient, Te
         sessions.values.forEach { it?.finishIfRunning() }
         sessions.clear()
         terminalView = null
+    }
+
+    fun setLang(lang: String) {
+        currentLang = lang
+        onLangChanged?.invoke(lang)
+        restartSession()
     }
 
     fun restartSession() {
@@ -271,7 +279,7 @@ class EmbeddedTerminal(private val context: Context) : TerminalSessionClient, Te
             "TERM=xterm-256color",
             "HOME=/root",
             "COLORTERM=truecolor",
-            "LANG=en_US.UTF-8"
+            "LANG=$currentLang"
         )
         val args = if (isSu) arrayOf<String>() else arrayOf<String>()
         try {
@@ -309,7 +317,7 @@ class EmbeddedTerminal(private val context: Context) : TerminalSessionClient, Te
         return "/system/bin/sh"
     }
 
-    private fun buildChrootCommandUbuntu(rootfsDir: String, filesDir: String): String {
+    private fun buildChrootCommandGeneric(rootfsDir: String, filesDir: String): String {
         val tmpDir = "$filesDir/tmp"
         return """#!/bin/sh
 ROOTFS_DIR="$rootfsDir"
@@ -365,7 +373,7 @@ export LOGNAME=root
 export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 export TERM=xterm-256color
 export COLORTERM=truecolor
-export LANG=en_US.UTF-8
+export LANG=$currentLang
 export PS1='\[\e[32m\]root@winland_ubuntu:\w# \[\e[0m\]'
 export XDG_RUNTIME_DIR=${'$'}FILES_DIR/tmp
 export WAYLAND_DISPLAY=wayland-0
@@ -437,7 +445,7 @@ export LOGNAME=root
 export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 export TERM=xterm-256color
 export COLORTERM=truecolor
-export LANG=en_US.UTF-8
+export LANG=$currentLang
 export PS1='\[\e[31m\]root@winland_kali:\w# \[\e[0m\]'
 export XDG_RUNTIME_DIR=${'$'}FILES_DIR/tmp
 export WAYLAND_DISPLAY=wayland-0

@@ -4,8 +4,8 @@ object DistroCatalog {
     val supportedDistros = listOf(
         LinuxDistro(
             id = "ubuntu",
-            name = "Ubuntu 24.04 (Noble Base)",
-            description = "Minimal Ubuntu Noble Rootfs",
+            name = "Ubuntu 24.04 (Minimal)",
+            description = "Minimal Ubuntu 24.04 Rootfs",
             url = "https://cdimage.ubuntu.com/ubuntu-base/noble/daily/current/noble-base-arm64.tar.gz"
         ),
         LinuxDistro(

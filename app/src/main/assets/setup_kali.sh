@@ -51,48 +51,22 @@ install_with_retry \
 
 install_with_retry xfce4 xfce4-terminal || true
 
-echo "INFO: Installing GPU drivers (Vulkan + Mesa KGSL)..."
-GPU_URL="https://github.com/eirkkk/winland-Android/releases/download/main/gpu.tar.gz"
-GPU_TAR="/tmp/gpu.tar.gz"
+echo "INFO: Installing GPU drivers (Mesa GPU deb)..."
+GPU_URL="https://github.com/eirkkk/winland-Android/releases/download/main/mesa-gpu_25.2.8_arm64.deb"
+GPU_DEB="/tmp/mesa-gpu_25.2.8_arm64.deb"
 if command -v wget >/dev/null 2>&1; then
-    wget -q "$GPU_URL" -O "$GPU_TAR" || echo "WARN: wget failed"
+    wget -q "$GPU_URL" -O "$GPU_DEB" || echo "WARN: wget failed"
 elif command -v curl >/dev/null 2>&1; then
-    curl -sL "$GPU_URL" -o "$GPU_TAR" || echo "WARN: curl failed"
+    curl -sL "$GPU_URL" -o "$GPU_DEB" || echo "WARN: curl failed"
 fi
-if [ -f "$GPU_TAR" ] && [ -s "$GPU_TAR" ]; then
-    tar -xzf "$GPU_TAR" -C / --strip-components=1
+if [ -f "$GPU_DEB" ] && [ -s "$GPU_DEB" ]; then
+    dpkg -i "$GPU_DEB" || apt-get -yq -f install || true
 
     install_with_retry libxcb-keysyms1
 
-    rm -f /usr/share/vulkan/icd.d/asahi_icd.json \
-          /usr/share/vulkan/icd.d/broadcom_icd.json \
-          /usr/share/vulkan/icd.d/gfxstream_vk_icd.json \
-          /usr/share/vulkan/icd.d/intel_icd.json \
-          /usr/share/vulkan/icd.d/lvp_icd.json \
-          /usr/share/vulkan/icd.d/nouveau_icd.json \
-          /usr/share/vulkan/icd.d/panfrost_icd.json \
-          /usr/share/vulkan/icd.d/radeon_icd.json \
-          /usr/share/vulkan/icd.d/virtio_icd.json \
-          /usr/share/vulkan/icd.d/freedreno_icd.json
-
-    rm -f /usr/lib/aarch64-linux-gnu/libvulkan_asahi.so \
-          /usr/lib/aarch64-linux-gnu/libvulkan_broadcom.so \
-          /usr/lib/aarch64-linux-gnu/libvulkan_gfxstream.so \
-          /usr/lib/aarch64-linux-gnu/libvulkan_intel.so \
-          /usr/lib/aarch64-linux-gnu/libvulkan_lvp.so \
-          /usr/lib/aarch64-linux-gnu/libvulkan_nouveau.so \
-          /usr/lib/aarch64-linux-gnu/libvulkan_panfrost.so \
-          /usr/lib/aarch64-linux-gnu/libvulkan_radeon.so \
-          /usr/lib/aarch64-linux-gnu/libvulkan_virtio.so
-    rm -f /usr/lib/aarch64-linux-gnu/libvulkan.so
-
-    ldconfig 2>/dev/null || true
-
-    ln -sf libvulkan.so.1 /usr/lib/aarch64-linux-gnu/libvulkan.so
-
     echo "INFO: GPU drivers installed and configured."
 else
-    echo "WARN: GPU tarball download failed. Will use software rendering."
+    echo "WARN: GPU deb download failed. Will use software rendering."
 fi
 
 mkdir -p /etc/xdg/labwc

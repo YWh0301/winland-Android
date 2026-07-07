@@ -131,6 +131,8 @@ class TerminalActivity : ComponentActivity(), TerminalSessionClient, TerminalVie
         val filesDir = getUnifiedFilesDir()
         val rootfsDir = getUnifiedRootfsDir(distroId)
         val status = ChrootInstaller.getChrootStatus(this, distroId)
+        val prefs = getSharedPreferences("winland_prefs", MODE_PRIVATE)
+        val terminalLang = prefs.getString("terminal_lang", "en_US.UTF-8") ?: "en_US.UTF-8"
 
         val shellBinary = findShellBinary()
         val isSu = shellBinary.endsWith("/su")
@@ -142,7 +144,7 @@ class TerminalActivity : ComponentActivity(), TerminalSessionClient, TerminalVie
         if (status.ready && isSu) {
             // Write chroot script to a file and execute it via su
             val chrootScriptFile = java.io.File(filesDir, "chroot-terminal_$distroId.sh")
-            chrootScriptFile.writeText(buildChrootCommand(rootfsDir, filesDir, distroId))
+            chrootScriptFile.writeText(buildChrootCommand(rootfsDir, filesDir, distroId, terminalLang))
             chrootScriptFile.setExecutable(true, false)
             cwd = "/"
             args = arrayOf("-c", "sh ${chrootScriptFile.absolutePath}")
@@ -157,7 +159,7 @@ class TerminalActivity : ComponentActivity(), TerminalSessionClient, TerminalVie
             "TERM=xterm-256color",
             "HOME=/root",
             "COLORTERM=truecolor",
-            "LANG=en_US.UTF-8"
+            "LANG=$terminalLang"
         )
 
         try {
@@ -178,7 +180,7 @@ class TerminalActivity : ComponentActivity(), TerminalSessionClient, TerminalVie
         }
     }
 
-    private fun buildChrootCommand(rootfsDir: String, filesDir: String, distroId: String): String {
+    private fun buildChrootCommand(rootfsDir: String, filesDir: String, distroId: String, lang: String = "en_US.UTF-8"): String {
         val tmpDir = "$filesDir/tmp"
         return """
             set -e
@@ -186,6 +188,9 @@ class TerminalActivity : ComponentActivity(), TerminalSessionClient, TerminalVie
             TMP_DIR="$tmpDir"
             FILES_DIR="$filesDir"
             EXT_STORAGE=/storage/emulated/0
+            PULSE_SOCKET_PATH="/tmp/pulse-runtime/native"
+            PULSE_SERVER_VAL="unix:/tmp/pulse-runtime/native"
+            XDG_RUNTIME_DIR_VAL="/run/user/0"
 
             unmount_safe() {
                 umount "$1" 2>/dev/null || umount -l "$1" 2>/dev/null || true
@@ -219,17 +224,74 @@ class TerminalActivity : ComponentActivity(), TerminalSessionClient, TerminalVie
             mkdir -p "${'$'}ROOTFS_DIR${'$'}FILES_DIR/tmp"
             mount -o bind "${'$'}TMP_DIR" "${'$'}ROOTFS_DIR${'$'}FILES_DIR/tmp" 2>/dev/null || true
 
-chmod 1777 "${'$'}ROOTFS_DIR/tmp" 2>/dev/null || true
-chmod 1777 "${'$'}TMP_DIR" 2>/dev/null || true
+            chmod 1777 "${'$'}ROOTFS_DIR/tmp" 2>/dev/null || true
+            chmod 1777 "${'$'}TMP_DIR" 2>/dev/null || true
 
-export HOME=/root
+            mkdir -p "${'$'}ROOTFS_DIR/tmp/pulse-runtime"
+            chmod 777 "${'$'}ROOTFS_DIR/tmp/pulse-runtime"
+
+            chroot "${'$'}ROOTFS_DIR" /bin/bash <<'CHROOT_AUDIO'
+                export HOME=/root
+                export USER=root
+                export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+                export PULSE_SOCKET_PATH="/tmp/pulse-runtime/native"
+                export PULSE_SERVER_VAL="unix:/tmp/pulse-runtime/native"
+
+                echo "Starting PulseAudio..."
+                chmod 1777 /tmp 2>/dev/null || true
+                mkdir -p /tmp/pulse-runtime
+                chmod 777 /tmp/pulse-runtime 2>/dev/null || true
+                rm -rf /tmp/pulse-verbose.log ${'$'}PULSE_SOCKET_PATH /tmp/pulse.pa
+                mkdir -p /root/.config/pulse
+                cat <<CLIENT_EOF > /root/.config/pulse/client.conf
+                autospawn = no
+                default-server = ${'$'}PULSE_SERVER_VAL
+CLIENT_EOF
+                mkdir -p /tmp/audio_bridge
+                chmod 777 /tmp/audio_bridge
+                mkfifo -m 666 /tmp/audio_bridge/fifo 2>/dev/null || true
+                exec 3<>/tmp/audio_bridge/fifo
+                cat <<PULSE_EOF > /tmp/pulse.pa
+                load-module module-native-protocol-unix auth-anonymous=1 socket=${'$'}PULSE_SOCKET_PATH
+                load-module module-pipe-sink sink_name=AndroidSink file=/tmp/audio_bridge/fifo format=s16le channels=2 rate=44100
+                set-default-sink AndroidSink
+                load-module module-pipe-source source_name=AndroidMic file=/tmp/audio_bridge/mic_fifo format=s16le channels=1 rate=44100
+                set-default-source AndroidMic
+PULSE_EOF
+
+                chmod 755 /run 2>/dev/null || true
+                mkdir -p /var/run/pulse
+                chown pulse:pulse /var/run/pulse 2>/dev/null || chown 101:102 /var/run/pulse 2>/dev/null || true
+                unset PULSE_SERVER
+                rm -f /run/user/0/pulse/pid 2>/dev/null || true
+                pulseaudio -n -F /tmp/pulse.pa --daemonize --system --realtime=no --disallow-exit --exit-idle-time=-1 --disable-shm=yes --use-pid-file=false --log-target=file:/tmp/pulse-verbose.log -vvvv || true
+                pulse_wait_ok=0
+                j=0
+                while [ "${'$'}j" -lt 10 ]; do
+                    if [ -S ${'$'}PULSE_SOCKET_PATH ]; then
+                        chmod 777 ${'$'}PULSE_SOCKET_PATH 2>/dev/null || true
+                        pulse_wait_ok=1
+                        echo "RUN: confirmed pulse socket at ${'$'}PULSE_SOCKET_PATH"
+                        break
+                    fi
+                    sleep 1
+                    j=${'$'}((j + 1))
+                done
+                export PULSE_SERVER=${'$'}PULSE_SERVER_VAL
+                if [ "${'$'}pulse_wait_ok" -ne 1 ]; then
+                    echo "WARN: pulse socket missing at ${'$'}PULSE_SOCKET_PATH"
+                fi
+CHROOT_AUDIO
+
+            export HOME=/root
             export USER=root
             export TERM=xterm-256color
             export COLORTERM=truecolor
-            export LANG=en_US.UTF-8
+            export LANG=$lang
             export PS1='root@winland_$distroId:\w# '
-            export XDG_RUNTIME_DIR=${'$'}FILES_DIR/tmp
+            export XDG_RUNTIME_DIR=${'$'}XDG_RUNTIME_DIR_VAL
             export WAYLAND_DISPLAY=wayland-0
+            export PULSE_SERVER=${'$'}PULSE_SERVER_VAL
             exec chroot "${'$'}ROOTFS_DIR" /bin/bash --login
         """.trimIndent()
     }

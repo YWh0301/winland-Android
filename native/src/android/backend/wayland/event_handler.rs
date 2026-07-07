@@ -52,8 +52,11 @@ fn dispatch_routed_event(event: RoutedInputEvent) {
 		RoutedInputEvent::TextCommit { text } => {
 			log::debug!("WaylandInput: text_commit len={}", text.len());
 		}
-		RoutedInputEvent::GestureScroll { dx, dy } => {
-			log::debug!("WaylandInput: gesture_scroll dx={} dy={}", dx, dy);
+		RoutedInputEvent::GestureScroll { dx, dy, rx, ry } => {
+			log::debug!("WaylandInput: gesture_scroll dx={} dy={} rx={} ry={}", dx, dy, rx, ry);
+		}
+		RoutedInputEvent::GestureScrollEnd => {
+			log::debug!("WaylandInput: gesture_scroll_end");
 		}
 	}
 }

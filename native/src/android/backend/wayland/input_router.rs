@@ -2,7 +2,7 @@ use crate::android::backend::wayland::engine_timing;
 #[cfg(feature = "smithay_android")]
 use crate::android::backend::wayland::input::{RoutedInputEvent, TouchPoint};
 #[cfg(feature = "smithay_android")]
-use crate::android::backend::wayland::seat::{AndroidSeatRuntime, GestureTarget, WinlandInputMode};
+use crate::android::backend::wayland::seat::{AndroidSeatRuntime, WinlandInputMode};
 #[cfg(feature = "smithay_android")]
 use crate::android::backend::wayland::shell::WindowElement;
 #[cfg(feature = "smithay_android")]
@@ -28,8 +28,6 @@ use smithay::wayland::compositor;
 use smithay::wayland::seat::WaylandFocus;
 #[cfg(feature = "smithay_android")]
 use smithay::wayland::xwayland_shell::XWAYLAND_SHELL_ROLE;
-#[cfg(feature = "smithay_android")]
-use smithay::xwayland::xwm::ResizeEdge;
 
 #[cfg(feature = "smithay_android")]
 fn is_xwayland_surface(surface: &WlSurface) -> bool {
@@ -186,10 +184,6 @@ impl AndroidSeatRuntime {
         self.swipe_starts.clear();
         self.swipe_cycle_armed = false;
         self.last_window_cycle_ms = 0;
-        self.gesture_target = None;
-        self.gesture_surface = None;
-        self.gesture_origin = (0.0, 0.0);
-        self.pending_compositor_move = false;
         self.trackpad_anchor = None;
         self.trackpad_moved = false;
         self.trackpad_dragging = false;
@@ -243,7 +237,6 @@ impl AndroidSeatRuntime {
     }
 
     fn dispatch_touch_down(&mut self, id: i32, point: &TouchPoint) {
-        self.pending_compositor_move = false;
         // Popup dismissal
         if self.popup_grab_active {
             let outside = if let Some(ref _grab_surface) = self.popup_grab_surface {
@@ -262,190 +255,9 @@ impl AndroidSeatRuntime {
             }
         }
 
-        // Gesture detection: titlebar buttons, window edges, drag
-        // Touch coordinates are in physical pixels; must divide by output scale
-        // to compare with logical window geometry (fx, fy, fw, fh).
-        if self.gesture_target.is_none() {
-            if let Some(ref focus) = self.focused_surface.clone() {
-                if let Some(window) = self.wl_to_window.get(focus) {
-                    let elem = WindowElement(window.clone());
-                    if let Some(loc) = self.space.element_location(&elem) {
-                        let bbox = elem.bbox();
-                        let fx = loc.x as f32;
-                        let fy = loc.y as f32;
-                        let fw = bbox.size.w as f32;
-                        let fh = bbox.size.h as f32;
-                        let s = self.output_scale() as f32;
-                        let lx = point.x / s;
-                        let ly = point.y / s;
-                        if fh > 0.0 && lx >= fx && lx <= fx + fw {
-                            let titlebar_h = 24.0;
-                            if ly >= fy - titlebar_h && ly <= fy {
-                                if lx >= fx + 8.0 && lx <= fx + 18.0 {
-                                    self.close_surface(focus.clone());
-                                    self.last_seat_dispatch = format!("close_btn id={}", id);
-                                    self.active_touch_ids.insert(id);
-                                    return;
-                                }
-                                if lx >= fx + 24.0 && lx <= fx + 34.0 {
-                                    self.toggle_minimize(focus.clone());
-                                    self.last_seat_dispatch = format!("minimize_btn id={}", id);
-                                    self.active_touch_ids.insert(id);
-                                    return;
-                                }
-                                if lx >= fx + 40.0 && lx <= fx + 50.0 {
-                                    self.toggle_maximize(focus.clone());
-                                    self.last_seat_dispatch = format!("maximize_btn id={}", id);
-                                    self.active_touch_ids.insert(id);
-                                    return;
-                                }
-                                self.gesture_target = Some(GestureTarget::Move);
-                                self.gesture_surface = Some(focus.clone());
-                                self.gesture_origin = (point.x, point.y);
-                                self.active_touch_ids.insert(id);
-                                self.last_seat_dispatch = format!(
-                                    "titlebar_drag id={} x={:.0} y={:.0}",
-                                    id, point.x, point.y
-                                );
-                                return;
-                            }
-                            let edge_px = 20.0;
-                            let edge = if ly >= fy + fh - edge_px && ly <= fy + fh {
-                                let is_left = lx <= fx + edge_px;
-                                let is_right = lx >= fx + fw - edge_px;
-                                match (is_left, is_right) {
-                                    (true, _) => Some(ResizeEdge::BottomLeft),
-                                    (_, true) => Some(ResizeEdge::BottomRight),
-                                    _ => Some(ResizeEdge::Bottom),
-                                }
-                            } else if lx >= fx && lx <= fx + edge_px {
-                                Some(ResizeEdge::Left)
-                            } else if lx >= fx + fw - edge_px && lx <= fx + fw {
-                                Some(ResizeEdge::Right)
-                            } else {
-                                None
-                            };
-                            if let Some(edge) = edge {
-                                self.gesture_target = Some(GestureTarget::Resize(edge));
-                                self.gesture_surface = Some(focus.clone());
-                                self.gesture_origin = (point.x, point.y);
-                                self.active_touch_ids.insert(id);
-                                self.last_seat_dispatch =
-                                    format!("resize_start id={} edge={:?}", id, edge);
-                                return;
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        if self.gesture_target.is_some() {
-            self.gesture_origin = (point.x, point.y);
-            self.active_touch_ids.insert(id);
-            self.last_seat_dispatch = format!("gesture_touch_down captured id={}", id);
-            return;
-        }
-    }
-
-    fn dispatch_touch_move_gesture(&mut self, id: i32, point: &TouchPoint) -> bool {
-        if let Some(target) = self.gesture_target {
-            if let Some(ref surface) = self.gesture_surface.clone() {
-                let dx = (point.x - self.gesture_origin.0) as i32;
-                let dy = (point.y - self.gesture_origin.1) as i32;
-                if let Some(window) = self.wl_to_window.get(surface).cloned() {
-                    let elem = WindowElement(window.clone());
-                    match target {
-                        GestureTarget::Move => {
-                            if let Some(loc) = self.space.element_location(&elem) {
-                                self.space.relocate_element(&elem, (loc.x + dx, loc.y + dy));
-                            }
-                        }
-                        GestureTarget::Resize(edge) => {
-                            let (_sw, _sh) = self.usable_screen_size();
-                            let bbox = elem.bbox();
-                            let mut nw = bbox.size.w + dx;
-                            let mut nh = bbox.size.h + dy;
-                            let mut nx = bbox.loc.x;
-                            let mut ny = bbox.loc.y;
-                            match edge {
-                                ResizeEdge::Right => nw = nw.max(100),
-                                ResizeEdge::Left => {
-                                    let new_w = nw.max(100);
-                                    nx += bbox.size.w - new_w;
-                                    nw = new_w;
-                                }
-                                ResizeEdge::Bottom => nh = nh.max(100),
-                                ResizeEdge::Top => {
-                                    let new_h = nh.max(100);
-                                    ny += bbox.size.h - new_h;
-                                    nh = new_h;
-                                }
-                                ResizeEdge::BottomRight => {
-                                    nw = nw.max(100);
-                                    nh = nh.max(100);
-                                }
-                                ResizeEdge::BottomLeft => {
-                                    let new_w = nw.max(100);
-                                    nx += bbox.size.w - new_w;
-                                    nw = new_w;
-                                    nh = nh.max(100);
-                                }
-                                ResizeEdge::TopRight => {
-                                    nw = nw.max(100);
-                                    let new_h = nh.max(100);
-                                    ny += bbox.size.h - new_h;
-                                    nh = new_h;
-                                }
-                                ResizeEdge::TopLeft => {
-                                    let new_w = nw.max(100);
-                                    nx += bbox.size.w - new_w;
-                                    nw = new_w;
-                                    let new_h = nh.max(100);
-                                    ny += bbox.size.h - new_h;
-                                    nh = new_h;
-                                }
-                            }
-                            self.space.relocate_element(&elem, (nx, ny));
-                            if let Some(xdg_toplevel) = window.toplevel() {
-                                xdg_toplevel
-                                    .with_pending_state(|state| state.size = Some((nw, nh).into()));
-                                xdg_toplevel.send_configure();
-                            } else if let Some(x11) = window.x11_surface() {
-                                let rect = smithay::utils::Rectangle::new(
-                                    (nx, ny).into(),
-                                    (nw.max(100), nh.max(100)).into(),
-                                );
-                                if x11.sync_request_supported() {
-                                    let _ = x11.configure_with_sync(rect, None);
-                                } else {
-                                    let _ = x11.configure(rect);
-                                }
-                            }
-                        }
-                    }
-                }
-                self.gesture_origin = (point.x, point.y);
-                self.render_all();
-            }
-            self.last_seat_dispatch = format!("gesture_move id={} target={:?}", id, target);
-            true
-        } else {
-            false
-        }
-    }
-
-    fn dispatch_touch_up_gesture(&mut self, id: i32) -> bool {
-        if self.gesture_target.is_some() {
-            self.pending_compositor_move = true;
-            self.gesture_target = None;
-            self.gesture_surface = None;
-            self.active_touch_ids.remove(&id);
-            self.render_all();
-            self.last_seat_dispatch = format!("gesture_touch_up released id={}", id);
-            true
-        } else {
-            false
-        }
+        // Touch-only mode: no gesture_target interception.
+        // All touch events pass through the pointer path to labwc,
+        // which handles window management (move, resize, SSD) itself.
     }
 
     fn handle_trackpad_down(&mut self, id: i32, point: &TouchPoint) {
@@ -674,7 +486,7 @@ impl AndroidSeatRuntime {
         }
     }
 
-    fn handle_absolute_pointer_down(&mut self, id: i32, point: &TouchPoint) {
+    fn handle_absolute_pointer_down(&mut self, id: i32, point: &TouchPoint, with_button: bool) {
         if self.primary_touch_id.is_some() {
             return;
         }
@@ -703,21 +515,29 @@ impl AndroidSeatRuntime {
             },
         );
         pointer.frame(self);
-        let press_time = engine_timing::now_ms_u32();
-        pointer.button(
-            self,
-            &ButtonEvent {
-                serial: SERIAL_COUNTER.next_serial(),
-                time: press_time,
-                button: 0x110,
-                state: ButtonState::Pressed,
-            },
-        );
-        pointer.frame(self);
-        engine_timing::emit_hybrid_trace(format!(
-            "AbsoluteMouse pointer_down id={} x={:.1} y={:.1} motion_t={} press_t={}",
-            id, point.x, point.y, motion_time, press_time
-        ));
+        if with_button {
+            let press_time = engine_timing::now_ms_u32();
+            pointer.button(
+                self,
+                &ButtonEvent {
+                    serial: SERIAL_COUNTER.next_serial(),
+                    time: press_time,
+                    button: 0x110,
+                    state: ButtonState::Pressed,
+                },
+            );
+            pointer.frame(self);
+            self.pointer_button_pressed = true;
+            engine_timing::emit_hybrid_trace(format!(
+                "AbsoluteMouse pointer_down id={} x={:.1} y={:.1} motion_t={} press_t={}",
+                id, point.x, point.y, motion_time, press_time
+            ));
+        } else {
+            engine_timing::emit_hybrid_trace(format!(
+                "AbsoluteMouse pointer_motion_only id={} x={:.1} y={:.1}",
+                id, point.x, point.y
+            ));
+        }
         self.last_seat_dispatch =
             format!("abs_mouse_down id={} x={:.0} y={:.0}", id, point.x, point.y);
         self.active_touch_ids.insert(id);
@@ -764,18 +584,21 @@ impl AndroidSeatRuntime {
         if self.primary_touch_id != Some(id) {
             return;
         }
-        let pointer = self.pointer.clone();
-        let release_time = engine_timing::now_ms_u32();
-        pointer.button(
-            self,
-            &ButtonEvent {
-                serial: SERIAL_COUNTER.next_serial(),
-                time: release_time,
-                button: 0x110,
-                state: ButtonState::Released,
-            },
-        );
-        pointer.frame(self);
+        if self.pointer_button_pressed {
+            let pointer = self.pointer.clone();
+            let release_time = engine_timing::now_ms_u32();
+            pointer.button(
+                self,
+                &ButtonEvent {
+                    serial: SERIAL_COUNTER.next_serial(),
+                    time: release_time,
+                    button: 0x110,
+                    state: ButtonState::Released,
+                },
+            );
+            pointer.frame(self);
+            self.pointer_button_pressed = false;
+        }
         engine_timing::emit_hybrid_trace(format!("AbsoluteMouse pointer_up id={}", id));
         self.primary_touch_id = None;
         self.last_seat_dispatch = format!("abs_mouse_up id={}", id);
@@ -857,6 +680,137 @@ impl AndroidSeatRuntime {
             entry.2 = point.x;
             entry.3 = point.y;
         }
+    }
+
+    fn handle_touch_click(&mut self, id: i32, point: &TouchPoint) {
+        // Complete click: motion → press → release at the same point
+        if self.primary_touch_id.is_some() {
+            return;
+        }
+        self.primary_touch_id = Some(id);
+        let logical_xy = self.logical_pt(point.x, point.y);
+        let forced_focus = self.apply_forced_focus_at("touch_click", logical_xy.x as f32, logical_xy.y as f32);
+        let pointer = self.pointer.clone();
+        let location = logical_xy;
+        let pointer_focus = forced_focus.as_ref().map(|s| {
+            let origin = self
+                .wl_to_window
+                .get(s)
+                .and_then(|w| self.space.element_location(&WindowElement(w.clone())))
+                .map(|loc| (loc.x as f64, loc.y as f64).into())
+                .unwrap_or_else(|| (0.0, 0.0).into());
+            (s.clone(), origin)
+        });
+        let click_time = engine_timing::now_ms_u32();
+        pointer.motion(
+            self,
+            pointer_focus,
+            &PointerMotionEvent {
+                location,
+                serial: SERIAL_COUNTER.next_serial(),
+                time: click_time,
+            },
+        );
+        pointer.frame(self);
+        pointer.button(
+            self,
+            &ButtonEvent {
+                serial: SERIAL_COUNTER.next_serial(),
+                time: click_time,
+                button: 0x110,
+                state: ButtonState::Pressed,
+            },
+        );
+        pointer.frame(self);
+        pointer.button(
+            self,
+            &ButtonEvent {
+                serial: SERIAL_COUNTER.next_serial(),
+                time: click_time,
+                button: 0x110,
+                state: ButtonState::Released,
+            },
+        );
+        pointer.frame(self);
+        self.primary_touch_id = None;
+        engine_timing::emit_hybrid_trace(format!(
+            "TouchClick id={} x={:.1} y={:.1}",
+            id, point.x, point.y
+        ));
+        self.last_seat_dispatch = format!("touch_click id={} x={:.0} y={:.0}", id, point.x, point.y);
+    }
+
+    fn handle_touch_right_click(&mut self, id: i32, point: &TouchPoint) {
+        // If a left-button selection drag is in progress, release it first
+        if self.pointer_button_pressed {
+            let pointer = self.pointer.clone();
+            pointer.button(
+                self,
+                &ButtonEvent {
+                    serial: SERIAL_COUNTER.next_serial(),
+                    time: engine_timing::now_ms_u32(),
+                    button: 0x110,
+                    state: ButtonState::Released,
+                },
+            );
+            pointer.frame(self);
+            self.pointer_button_pressed = false;
+            self.primary_touch_id = None;
+        }
+        if self.primary_touch_id.is_some() {
+            return;
+        }
+        self.primary_touch_id = Some(id);
+        let logical_xy = self.logical_pt(point.x, point.y);
+        let _ = self.apply_forced_focus_at("touch_right_click", logical_xy.x as f32, logical_xy.y as f32);
+        let pointer = self.pointer.clone();
+        let location = logical_xy;
+        let focus = self.focused_surface.as_ref().and_then(|s| {
+            let origin = self
+                .wl_to_window
+                .get(s)
+                .and_then(|w| self.space.element_location(&WindowElement(w.clone())))
+                .map(|loc| (loc.x as f64, loc.y as f64).into())
+                .unwrap_or_else(|| (0.0, 0.0).into());
+            Some((s.clone(), origin))
+        });
+        let ct = engine_timing::now_ms_u32();
+        pointer.motion(
+            self,
+            focus,
+            &PointerMotionEvent {
+                location,
+                serial: SERIAL_COUNTER.next_serial(),
+                time: ct,
+            },
+        );
+        pointer.frame(self);
+        pointer.button(
+            self,
+            &ButtonEvent {
+                serial: SERIAL_COUNTER.next_serial(),
+                time: ct,
+                button: 0x111,
+                state: ButtonState::Pressed,
+            },
+        );
+        pointer.frame(self);
+        pointer.button(
+            self,
+            &ButtonEvent {
+                serial: SERIAL_COUNTER.next_serial(),
+                time: ct,
+                button: 0x111,
+                state: ButtonState::Released,
+            },
+        );
+        pointer.frame(self);
+        self.primary_touch_id = None;
+        engine_timing::emit_hybrid_trace(format!(
+            "TouchRightClick id={} x={:.1} y={:.1}",
+            id, point.x, point.y
+        ));
+        self.last_seat_dispatch = format!("touch_right_click id={} x={:.0} y={:.0}", id, point.x, point.y);
     }
 
     fn handle_touch_up(&mut self, id: i32) {
@@ -1027,37 +981,81 @@ impl AndroidSeatRuntime {
         });
         let has_focus = focus.is_some();
         let mode = self.current_input_mode;
-        let is_xwayland = focus.as_ref().map(is_xwayland_surface).unwrap_or(false);
+        let _is_xwayland = focus.as_ref().map(is_xwayland_surface).unwrap_or(false);
 
         match mode {
             WinlandInputMode::Touch => match event {
                 RoutedInputEvent::TouchDown { id, point } => {
+                    // Multi-touch fallback (2+ fingers)
+                    if self.active_touch_ids.len() >= 1 {
+                        self.touch_two_finger_tap_active = true;
+                    }
                     self.dispatch_touch_down(*id, point);
-                    if self.gesture_target.is_some() || self.last_seat_dispatch.contains("_btn ") {
-                        return;
-                    }
-                    if is_xwayland {
-                        self.handle_absolute_pointer_down(*id, point);
-                    }
+                    self.handle_absolute_pointer_down(*id, point, true);
                     self.handle_touch_down(*id, point, &focus);
                 }
                 RoutedInputEvent::TouchMove { id, point } => {
-                    if self.dispatch_touch_move_gesture(*id, point) {
-                        return;
+                    // Only clear two-finger tap if a DIFFERENT finger moves
+                    if self.touch_two_finger_tap_active && self.primary_touch_id != Some(*id) {
+                        self.touch_two_finger_tap_active = false;
                     }
-                    if is_xwayland {
-                        self.handle_absolute_pointer_move(*id, point, &focus);
-                    }
+                    self.handle_absolute_pointer_move(*id, point, &focus);
                     self.handle_touch_move(*id, point, &focus);
                 }
                 RoutedInputEvent::TouchUp { id } => {
-                    if self.dispatch_touch_up_gesture(*id) {
-                        return;
-                    }
-                    if is_xwayland {
+                    if self.touch_two_finger_tap_active {
+                        // Two-finger tap handling: all fingers are tapping
+                        let p = self.pointer.clone();
+                        self.handle_touch_up(*id);  // removes from active_touch_ids
+                        if self.active_touch_ids.is_empty() {
+                            // All fingers lifted → right-click
+                            self.touch_two_finger_tap_active = false;
+                            // Release left button (pressed by first TouchDown)
+                            if self.pointer_button_pressed {
+                                p.button(
+                                    self,
+                                    &ButtonEvent {
+                                        serial: SERIAL_COUNTER.next_serial(),
+                                        time: engine_timing::now_ms_u32(),
+                                        button: 0x110,
+                                        state: ButtonState::Released,
+                                    },
+                                );
+                                p.frame(self);
+                                self.pointer_button_pressed = false;
+                            }
+                            // Right button click
+                            let ct = engine_timing::now_ms_u32();
+                            p.button(
+                                self,
+                                &ButtonEvent {
+                                    serial: SERIAL_COUNTER.next_serial(),
+                                    time: ct,
+                                    button: 0x111,
+                                    state: ButtonState::Pressed,
+                                },
+                            );
+                            p.frame(self);
+                            p.button(
+                                self,
+                                &ButtonEvent {
+                                    serial: SERIAL_COUNTER.next_serial(),
+                                    time: ct,
+                                    button: 0x111,
+                                    state: ButtonState::Released,
+                                },
+                            );
+                            p.frame(self);
+                            self.primary_touch_id = None;
+                            engine_timing::emit_hybrid_trace(
+                                "Two-finger tap → right-click".to_string(),
+                            );
+                            self.last_seat_dispatch = "touch_two_finger_tap".into();
+                        }
+                    } else {
                         self.handle_absolute_pointer_up(*id);
+                        self.handle_touch_up(*id);
                     }
-                    self.handle_touch_up(*id);
                 }
                 RoutedInputEvent::TouchCancel { .. } => {
                     let t = self.touch.clone();
@@ -1066,7 +1064,15 @@ impl AndroidSeatRuntime {
                     self.swipe_starts.clear();
                     self.active_touch_ids.clear();
                     self.swipe_cycle_armed = false;
+                    self.touch_two_finger_tap_active = false;
                     self.last_seat_dispatch = format!("touch_cancel touch focus={}", has_focus);
+                }
+                RoutedInputEvent::TouchClick { id, point } => {
+                    self.handle_touch_click(*id, point);
+                }
+                RoutedInputEvent::TouchRightClick { id, point } => {
+                    self.handle_touch_down(*id, point, &focus);
+                    self.handle_touch_right_click(*id, point);
                 }
                 _ => {}
             },
@@ -1092,7 +1098,8 @@ impl AndroidSeatRuntime {
             },
             WinlandInputMode::Mouse => match event {
                 RoutedInputEvent::TouchDown { id, point } => {
-                    self.handle_absolute_pointer_down(*id, point);
+                    self.mouse_last_pos = (point.x, point.y);
+                    self.handle_absolute_pointer_down(*id, point, true);
                 }
                 RoutedInputEvent::TouchMove { id, point } => {
                     if self.primary_touch_id == Some(*id) && self.focused_surface.is_some() {
@@ -1107,9 +1114,9 @@ impl AndroidSeatRuntime {
                             })
                             .unwrap_or(false);
                         if constrained {
-                            let raw_dx = point.x - self.gesture_origin.0;
-                            let raw_dy = point.y - self.gesture_origin.1;
-                            self.gesture_origin = (point.x, point.y);
+                            let raw_dx = point.x - self.mouse_last_pos.0;
+                            let raw_dy = point.y - self.mouse_last_pos.1;
+                            self.mouse_last_pos = (point.x, point.y);
                             let speed = (raw_dx * raw_dx + raw_dy * raw_dy).sqrt();
                             let accel = 1.0 + 0.3 * (speed / 300.0).min(2.0);
                             let s = self.relative_sensitivity;
@@ -1261,18 +1268,72 @@ impl AndroidSeatRuntime {
                 }
                 self.inject_text_commit(text);
             }
-            RoutedInputEvent::GestureScroll { dx, dy } => {
-                self.ensure_focus_for_non_pointer("gesture_scroll");
-                let sensitivity = crate::android::command_channel::get_scroll_sensitivity() as f64;
+            RoutedInputEvent::GestureScroll { dx, dy, rx, ry } => {
+                // Send smooth scroll with discrete (v120) steps so that both
+                // Wayland-native and XWayland clients receive scroll events.
+                //
+                // Pointer focus was already established by
+                // handle_absolute_pointer_down() on the initial touch-down, so
+                // we don't send a redundant pointer.motion() that would show
+                // the hardware cursor in touch mode.
+                //
+                // If pointer focus is missing (edge case), hit-test the centroid
+                // and inject a motion event to re-establish it.
                 let pointer = self.pointer.clone();
+                if pointer.current_focus().is_none() {
+                    if let Some(surface) = self
+                        .choose_focus_at_point(*rx, *ry)
+                        .or_else(|| self.focused_surface.clone())
+                    {
+                        let logical_xy = self.logical_pt(*rx, *ry);
+                        let origin = self
+                            .wl_to_window
+                            .get(&surface)
+                            .and_then(|w| self.space.element_location(&WindowElement(w.clone())))
+                            .map(|loc| (loc.x as f64, loc.y as f64).into())
+                            .unwrap_or_else(|| (0.0, 0.0).into());
+                        pointer.motion(
+                            self,
+                            Some((surface, origin)),
+                            &PointerMotionEvent {
+                                location: logical_xy,
+                                serial: SERIAL_COUNTER.next_serial(),
+                                time: engine_timing::now_ms_u32(),
+                            },
+                        );
+                        pointer.frame(self);
+                    }
+                }
+                let sensitivity =
+                    crate::android::command_channel::get_scroll_sensitivity() as f64;
+                let value_x = -(*dx as f64) * sensitivity;
+                let value_y = -(*dy as f64) * sensitivity;
+                // v120 = 120 per discrete "click". Map a normalised centroid
+                // delta of ~0.01 to one click (120).
+                let v120_x = (value_x * 12000.0) as i32;
+                let v120_y = (value_y * 12000.0) as i32;
                 let axis = AxisFrame::new(engine_timing::now_ms_u32())
                     .source(AxisSource::Finger)
-                    .value(Axis::Horizontal, -(*dx as f64) * sensitivity)
-                    .value(Axis::Vertical, -(*dy as f64) * sensitivity);
+                    .v120(Axis::Horizontal, v120_x)
+                    .value(Axis::Horizontal, value_x)
+                    .v120(Axis::Vertical, v120_y)
+                    .value(Axis::Vertical, value_y);
                 pointer.axis(self, axis);
                 pointer.frame(self);
-                self.last_seat_dispatch =
-                    format!("scroll dx={:.1} dy={:.1} focus={}", dx, dy, has_focus);
+                self.last_seat_dispatch = format!(
+                    "scroll dx={:.3} dy={:.3} v120_x={} v120_y={} rx={:.0} ry={:.0}",
+                    dx, dy, v120_x, v120_y, rx, ry,
+                );
+            }
+            RoutedInputEvent::GestureScrollEnd => {
+                let pointer = self.pointer.clone();
+                let end_axis = AxisFrame::new(engine_timing::now_ms_u32())
+                    .source(AxisSource::Finger)
+                    .stop(Axis::Horizontal)
+                    .stop(Axis::Vertical);
+                pointer.axis(self, end_axis);
+                pointer.frame(self);
+                self.last_seat_dispatch = "scroll_end".into();
             }
             _ => {}
         }

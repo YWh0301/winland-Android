@@ -400,6 +400,10 @@ UP_EOF
                 XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR_VAL \
                 WINLAND_SOCKET_DIR=$filesDir/tmp \
                 PULSE_SERVER=$PULSE_SERVER_VAL \
+                XKB_DEFAULT_LAYOUT=us,ara \
+                XKB_DEFAULT_OPTIONS=grp:shift_caps_toggle,grp_led:scroll \
+                MOZ_ENABLE_WAYLAND=1 \
+                _JAVA_AWT_WM_NONREPARENTING=1 \
                 /bin/bash -l <<'CHROOT_EOF'
 
                 log_runtime_guest() {
@@ -509,7 +513,7 @@ PULSE_EOF
                 export XCURSOR_PATH=/usr/share/icons
                 export XCURSOR_THEME=default
                 export QT_QPA_PLATFORM=xcb
-                export GDK_BACKEND=x11
+                export GDK_BACKEND=wayland
                 export SDL_VIDEODRIVER=wayland
                 export PULSE_SERVER=$PULSE_SERVER_VAL
                 export GDK_SCALE=1
@@ -517,33 +521,18 @@ PULSE_EOF
                 export ELM_SCALE=$desktopScale
                 export QT_AUTO_SCREEN_SCALE_FACTOR=1
                 export QT_SCALE_FACTOR=$desktopScale
-                export LIBGL_ALWAYS_SOFTWARE=1
+                export XKB_DEFAULT_LAYOUT=us,ara
+                export XKB_DEFAULT_OPTIONS=grp:shift_caps_toggle,grp_led:scroll
+                export MOZ_ENABLE_WAYLAND=1
+                export _JAVA_AWT_WM_NONREPARENTING=1
                 export GALLIUM_DRIVER=llvmpipe
+                export WLR_RENDERER=pixman
 
-                log_runtime_guest 'RUN: launching Xwayland :0...'
-                mkdir -p /tmp/.X11-unix
-                Xwayland :0 >/tmp/xwayland.log 2>&1 &
-                XWAYLAND_PID=${'$'}!
-                log_runtime_guest "RUN: Xwayland PID=${'$'}XWAYLAND_PID"
-
-                x_wait=0
-                while [ "${'$'}x_wait" -lt 15 ]; do
-                    if [ -S "/tmp/.X11-unix/X0" ]; then
-                        log_runtime_guest "RUN: confirmed X11 socket /tmp/.X11-unix/X0"
-                        break
-                    fi
-                    sleep 1
-                    x_wait=${'$'}((x_wait + 1))
-                done
-                if [ "${'$'}x_wait" -ge 15 ]; then
-                    log_runtime_guest "WARN: X11 socket not found after 15s, continuing anyway"
-                fi
-
-                log_runtime_guest 'RUN: launching XFCE desktop session'
+                log_runtime_guest 'RUN: launching XFCE desktop session (native Wayland)'
 
                 if command -v startxfce4 >/dev/null 2>&1; then
-                    log_runtime_guest "RUN: launching startxfce4 (X11 via Xwayland)..."
-                    run_in_dbus_session startxfce4 >/tmp/xfce.log 2>&1
+                    log_runtime_guest "RUN: launching startxfce4 --wayland (native Wayland)..."
+                    run_in_dbus_session startxfce4 --wayland >/tmp/xfce.log 2>&1
                 else
                     log_runtime_guest "FATAL: startxfce4 not found in guest PATH"
                     exit 1

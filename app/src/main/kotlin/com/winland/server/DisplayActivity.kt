@@ -910,16 +910,23 @@ class DisplayActivity : ComponentActivity() {
 
             val actionMasked = event.actionMasked
 
-            // Two-finger right-click: intercept before trackpad routing to avoid
-            // lifecycle issues with the second finger's touch ID.
-            if (actionMasked == android.view.MotionEvent.ACTION_POINTER_DOWN && event.pointerCount >= 2) {
+            // Two-finger right-click: forward second finger to Rust state machine.
+            // The was_armed logic in route_touch handles the context-menu trigger.
+            if (actionMasked == android.view.MotionEvent.ACTION_POINTER_DOWN
+                && event.pointerCount >= 2
+            ) {
+                if (gestureState == GestureState.TAP_PENDING || gestureState == GestureState.DRAG_ACTIVE) {
+                    mainHandler.removeCallbacks(longPressRunnable)
+                }
                 if (NativeBridge.isLoaded()) {
-                    val now = (SystemClock.uptimeMillis() and 0x7FFFFFFF).toInt()
-                    NativeBridge.sendTrackpadClick(1, 0x111, now)
-                    this.postDelayed({
-                        NativeBridge.sendTrackpadClick(0, 0x111,
-                            (SystemClock.uptimeMillis() and 0x7FFFFFFF).toInt())
-                    }, 50)
+                    val i = event.actionIndex
+                    val pointerId = event.getPointerId(i)
+                    val x = event.getX(i)
+                    val y = event.getY(i)
+                    NativeBridge.sendTouchEvent(
+                        android.view.MotionEvent.ACTION_POINTER_DOWN,
+                        pointerId, x, y
+                    )
                 }
                 return true
             }
@@ -944,22 +951,6 @@ class DisplayActivity : ComponentActivity() {
                         NativeBridge.sendTouchEvent(actionMasked, pointerId, x, y)
                     }
                     mainHandler.postDelayed(longPressRunnable, LONG_PRESS_MS)
-                }
-
-                android.view.MotionEvent.ACTION_POINTER_DOWN -> {
-                    if (gestureState == GestureState.TAP_PENDING || gestureState == GestureState.DRAG_ACTIVE) {
-                        mainHandler.removeCallbacks(longPressRunnable)
-                        if (NativeBridge.isLoaded()) {
-                            val now = (SystemClock.uptimeMillis() and 0x7FFFFFFF).toInt()
-                            NativeBridge.sendTrackpadClick(1, 3, now)
-                            NativeBridge.sendTrackpadClick(0, 3, now)
-                            NativeBridge.sendTouchEvent(
-                                android.view.MotionEvent.ACTION_CANCEL,
-                                primaryPointerId, primaryDownX, primaryDownY
-                            )
-                        }
-                        gestureState = GestureState.IDLE
-                    }
                 }
 
                 android.view.MotionEvent.ACTION_MOVE -> {
@@ -1023,20 +1014,27 @@ class DisplayActivity : ComponentActivity() {
                     }
                 }
 
+                android.view.MotionEvent.ACTION_POINTER_UP -> {
+                    if (NativeBridge.isLoaded()) {
+                        val i = event.actionIndex
+                        val pointerId = event.getPointerId(i)
+                        val x = event.getX(i)
+                        val y = event.getY(i)
+                        NativeBridge.sendTouchEvent(
+                            android.view.MotionEvent.ACTION_POINTER_UP,
+                            pointerId, x, y
+                        )
+                    }
+                }
+
                 android.view.MotionEvent.ACTION_UP -> {
                     mainHandler.removeCallbacks(longPressRunnable)
                     val i = event.actionIndex
                     val pointerId = event.getPointerId(i)
                     val x = event.getX(i)
                     val y = event.getY(i)
-                    if (gestureState == GestureState.TAP_PENDING) {
-                        if (NativeBridge.isLoaded()) {
-                            NativeBridge.sendTouchEvent(actionMasked, pointerId, x, y)
-                        }
-                    } else if (gestureState == GestureState.DRAG_ACTIVE && pointerId == primaryPointerId) {
-                        if (NativeBridge.isLoaded()) {
-                            NativeBridge.sendTouchEvent(actionMasked, pointerId, x, y)
-                        }
+                    if (NativeBridge.isLoaded()) {
+                        NativeBridge.sendTouchEvent(actionMasked, pointerId, x, y)
                     }
                     gestureState = GestureState.IDLE
                     parent?.requestDisallowInterceptTouchEvent(false)

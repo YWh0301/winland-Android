@@ -9,10 +9,13 @@ pub struct SeatInjectionStats {
     pub touch_move: u64,
     pub touch_up: u64,
     pub touch_cancel: u64,
+    pub touch_click: u64,
+    pub touch_right_click: u64,
     pub key_down: u64,
     pub key_up: u64,
     pub text_commit: u64,
     pub gesture_scroll: u64,
+    pub gesture_scroll_end: u64,
     pub last_event_time_ms: u64,
 }
 
@@ -57,6 +60,15 @@ pub fn record_injection(event: &RoutedInputEvent) {
         }
         RoutedInputEvent::GestureScroll { .. } => {
             guard.gesture_scroll += 1;
+        }
+        RoutedInputEvent::GestureScrollEnd => {
+            guard.gesture_scroll_end += 1;
+        }
+        RoutedInputEvent::TouchClick { .. } => {
+            guard.touch_click += 1;
+        }
+        RoutedInputEvent::TouchRightClick { .. } => {
+            guard.touch_right_click += 1;
         }
     }
 }
