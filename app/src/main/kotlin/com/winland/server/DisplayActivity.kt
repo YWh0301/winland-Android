@@ -1034,7 +1034,38 @@ class DisplayActivity : ComponentActivity() {
                     val x = event.getX(i)
                     val y = event.getY(i)
                     if (NativeBridge.isLoaded()) {
-                        NativeBridge.sendTouchEvent(actionMasked, pointerId, x, y)
+                        when (gestureState) {
+                            GestureState.MOVING -> {
+                                // CANCEL already cleared Rust state; RelativeMotion handles cursor.
+                                // Sending UP would generate a fake tap in Rust.
+                            }
+                            GestureState.DRAG_ACTIVE -> {
+                                val dx = x - primaryDownX
+                                val dy = y - primaryDownY
+                                if (dx * dx + dy * dy > LONG_PRESS_MOVE_THRESHOLD_PX * LONG_PRESS_MOVE_THRESHOLD_PX) {
+                                    // Was a real drag: send normal UP to release held button
+                                    NativeBridge.sendTouchEvent(actionMasked, pointerId, x, y)
+                                } else {
+                                    val prefs = context.getSharedPreferences("winland_prefs", Context.MODE_PRIVATE)
+                                    val trackpadMode = prefs.getInt("input_mode_mask", 1) == 2
+                                    if (trackpadMode) {
+                                        // Stationary long-press + lift in Trackpad → LEFT click
+                                        NativeBridge.sendTouchEvent(
+                                            android.view.MotionEvent.ACTION_CANCEL, pointerId, x, y
+                                        )
+                                        val now = (SystemClock.uptimeMillis() and 0x7FFFFFFF).toInt()
+                                        NativeBridge.sendTrackpadClick(1, 0x110, now)
+                                        NativeBridge.sendTrackpadClick(0, 0x110, now)
+                                    } else {
+                                        // Touch mode: normal UP, Rust handles it (Armed → swallow)
+                                        NativeBridge.sendTouchEvent(actionMasked, pointerId, x, y)
+                                    }
+                                }
+                            }
+                            else -> {
+                                NativeBridge.sendTouchEvent(actionMasked, pointerId, x, y)
+                            }
+                        }
                     }
                     gestureState = GestureState.IDLE
                     parent?.requestDisallowInterceptTouchEvent(false)
