@@ -47,7 +47,8 @@ apt-get -yq update
 install_with_retry \
     sudo wget libwayland-client0 labwc xwayland dbus-x11 \
     pulseaudio pulseaudio-utils wlr-randr \
-    fonts-noto-core fonts-kacst locales
+    fonts-noto-core fonts-kacst locales \
+    xsel wl-clipboard
 
 install_with_retry xfce4 xfce4-terminal || true
 
@@ -75,6 +76,157 @@ cat > /etc/xdg/labwc/autostart <<'EOF_AUTOSTART'
 wlr-randr --output WL-1 --custom-mode 1080x2296
 EOF_AUTOSTART
 chmod +x /etc/xdg/labwc/autostart
+
+cat > /etc/xdg/labwc/environment <<'EOF_ENV'
+XKB_DEFAULT_LAYOUT=us,ara
+XKB_DEFAULT_OPTIONS=grp:shift_caps_toggle,grp_led:scroll
+XCURSOR_THEME=default
+XCURSOR_SIZE=24
+_JAVA_AWT_WM_NONREPARENTING=1
+EOF_ENV
+
+cat > /etc/xdg/labwc/rc.xml <<'EOF_RCXML'
+<?xml version="1.0"?>
+<labwc_config>
+  <core>
+    <decoration>server</decoration>
+    <gap>0</gap>
+    <adaptiveSync>no</adaptiveSync>
+    <allowTearing>no</allowTearing>
+    <reuseOutputMode>no</reuseOutputMode>
+  </core>
+
+  <placement>
+    <policy>center</policy>
+  </placement>
+
+  <theme>
+    <name>Clearlooks</name>
+    <cornerRadius>6</cornerRadius>
+    <keepBorder>yes</keepBorder>
+    <font place="ActiveWindow">
+      <name>sans</name>
+      <size>10</size>
+    </font>
+    <font place="InactiveWindow">
+      <name>sans</name>
+      <size>10</size>
+    </font>
+    <font place="MenuItem">
+      <name>sans</name>
+      <size>10</size>
+    </font>
+    <font place="OnScreenDisplay">
+      <name>sans</name>
+      <size>10</size>
+    </font>
+  </theme>
+
+  <windowSwitcher show="yes" preview="yes" outlines="yes">
+    <fields>
+      <field content="type" width="25%" />
+      <field content="trimmed_identifier" width="25%" />
+      <field content="title" width="50%" />
+    </fields>
+  </windowSwitcher>
+
+  <resistance>
+    <screenEdgeStrength>20</screenEdgeStrength>
+    <windowEdgeStrength>20</windowEdgeStrength>
+  </resistance>
+
+  <resize popupShow="Never" />
+
+  <focus>
+    <followMouse>no</followMouse>
+    <followMouseRequiresMovement>yes</followMouseRequiresMovement>
+    <raiseOnFocus>no</raiseOnFocus>
+  </focus>
+
+  <snapping>
+    <range>5</range>
+    <topMaximize>yes</topMaximize>
+    <notifyClient>always</notifyClient>
+  </snapping>
+
+  <desktops>
+    <popupTime>1000</popupTime>
+    <names>
+      <name>Workspace 1</name>
+      <name>Workspace 2</name>
+      <name>Workspace 3</name>
+      <name>Workspace 4</name>
+    </names>
+  </desktops>
+
+  <keyboard>
+    <numlock>on</numlock>
+    <layoutScope>global</layoutScope>
+    <repeatRate>25</repeatRate>
+    <repeatDelay>600</repeatDelay>
+    <default />
+    <keybind key="W-Return">
+      <action name="Execute" command="xfce4-terminal" />
+    </keybind>
+    <keybind key="A-F2">
+      <action name="Execute" command="xfce4-appfinder" />
+    </keybind>
+    <keybind key="Print">
+      <action name="Execute" command="xfce4-screenshooter" />
+    </keybind>
+    <keybind key="C-A-L">
+      <action name="Execute" command="xflock4" />
+    </keybind>
+  </keyboard>
+
+  <mouse>
+    <doubleClickTime>500</doubleClickTime>
+    <scrollFactor>1.0</scrollFactor>
+    <default />
+    <context name="Root">
+      <mousebind button="Left" action="Press">
+        <action name="ShowMenu" menu="root-menu" />
+      </mousebind>
+      <mousebind button="Right" action="Press">
+        <action name="ShowMenu" menu="root-menu" />
+      </mousebind>
+      <mousebind direction="Up" action="Scroll">
+        <action name="GoToDesktop" to="left" wrap="yes" />
+      </mousebind>
+      <mousebind direction="Down" action="Scroll">
+        <action name="GoToDesktop" to="right" wrap="yes" />
+      </mousebind>
+    </context>
+  </mouse>
+
+  <touch deviceName="" mapToOutput="" />
+
+  <libinput>
+    <device category="default">
+      <tap>yes</tap>
+      <naturalScroll>yes</naturalScroll>
+      <leftHanded>no</leftHanded>
+      <middleEmulation>yes</middleEmulation>
+      <disableWhileTyping>yes</disableWhileTyping>
+      <clickMethod>clickfinger</clickMethod>
+    </device>
+    <device category="touch">
+      <tap>yes</tap>
+    </device>
+  </libinput>
+</labwc_config>
+EOF_RCXML
+
+mkdir -p /etc/xdg/menus
+cat > /etc/xdg/menus/labwc-applications.menu <<'EOF_MENU'
+<!DOCTYPE Menu PUBLIC "-//freedesktop//DTD Menu 1.0//EN"
+ "http://www.freedesktop.org/DTs/menu-1.0.dtd">
+<Menu>
+  <Name>Applications</Name>
+  <DefaultAppDirs/>
+  <DefaultDirectoryDirs/>
+</Menu>
+EOF_MENU
 
 RUNTIME_DIR="/tmp/xdg-runtime"
 XDG_RUNTIME_DIR_VAL="/tmp"

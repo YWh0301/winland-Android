@@ -21,13 +21,14 @@ A native Wayland compositor for Android that runs full Linux desktop environment
 ### Display & Graphics
 - **Native Wayland compositor** built with [Smithay](https://github.com/Smithay/smithay) — no VNC/RDP/streaming overhead
 - **Vulkan hardware acceleration** via Zink (OpenGL-on-Vulkan) using Turnip driver on Adreno GPUs
+- **GPU acceleration per-app**: Type `gpu` in the terminal followed by the game/app name to launch it with the Zink accelerator enabled
 - **OpenGL ES path** via Android HardwareBuffers for devices without Vulkan
 - **XWayland** support for legacy X11 applications
 - **Dynamic resolution** with persistent scale locking across Android lifecycle events
 - **Multi-display ready** architecture
 
 ### Input Systems
-- **Direct touch mapping** — pixel-accurate absolute positioning
+- **Full touch support** with trackpad emulation — one-finger cursor, two-finger scroll, tap-to-click
 - **Relative trackpad emulation** — delta-coordinate gestures for desktop-style cursor control
 - **External mouse** — full desktop-grade pointer support via USB/Bluetooth
 - **Physical keyboard** — complete keymap handling with XKB, multi-key shortcuts
@@ -35,6 +36,10 @@ A native Wayland compositor for Android that runs full Linux desktop environment
 ### Audio (Native)
 - **Native audio playback** — Zero-copy PCM audio routed via Oboe (AAudio) between chroot PulseAudio and Android audio hardware through a named FIFO pipe
 - **Native microphone input** — Android mic captured via Oboe (AAudio) at 44.1kHz mono 16-bit and streamed into chroot PulseAudio through a dedicated FIFO pipe; fully native with no VNC/streaming overhead
+
+### Clipboard
+- **Clipboard sync** — Copy/paste between Android and Linux applications
+- **Status**: Partial support (X11 clipboard path under active development, will be fully fixed in a future release)
 
 ### Chroot Environment
 - **Ubuntu 24.04 (Noble)** and **Kali Nethunter** rootfs support

@@ -68,6 +68,24 @@ fi
 
 enable_xfce_wayland_experimental
 
+echo "INFO: Installing GPU drivers (Mesa GPU deb)..."
+GPU_URL="https://github.com/eirkkk/winland-Android/releases/download/main/mesa-gpu_25.2.8_arm64.deb"
+GPU_DEB="/tmp/mesa-gpu_25.2.8_arm64.deb"
+if command -v wget >/dev/null 2>&1; then
+    wget -q "$GPU_URL" -O "$GPU_DEB" || echo "WARN: wget failed"
+elif command -v curl >/dev/null 2>&1; then
+    curl -sL "$GPU_URL" -o "$GPU_DEB" || echo "WARN: curl failed"
+fi
+if [ -f "$GPU_DEB" ] && [ -s "$GPU_DEB" ]; then
+    dpkg -i "$GPU_DEB" || apt-get -yq -f install || true
+
+    apt-get -yq install libxcb-keysyms1 || true
+
+    echo "INFO: GPU drivers installed and configured."
+else
+    echo "WARN: GPU deb download failed. Will use software rendering."
+fi
+
 echo "INFO: Generating Arabic locale..."
 locale-gen ar_SA.UTF-8 || true
 
@@ -81,8 +99,6 @@ XKB_DEFAULT_OPTIONS=grp:shift_caps_toggle,grp_led:scroll
 # Cursor
 XCURSOR_THEME=default
 XCURSOR_SIZE=24
-# Force Wayland backend for Mozilla apps
-MOZ_ENABLE_WAYLAND=1
 # Java non-reparenting for XWayland
 _JAVA_AWT_WM_NONREPARENTING=1
 EOF_ENV
@@ -247,7 +263,7 @@ PULSE_SERVER_VAL="unix:/tmp/pulse-socket"
 mkdir -p "$RUNTIME_DIR"
 chmod 700 "$RUNTIME_DIR"
 
-cat > /root/.bashrc <<'EOF_BASHRC'
+cat >> /root/.bashrc <<'EOF_BASHRC'
 export DISPLAY=:0
 export XDG_SESSION_TYPE=wayland
 export XDG_CURRENT_DESKTOP=XFCE
@@ -258,10 +274,8 @@ export XCURSOR_PATH=/usr/share/icons
 export XCURSOR_THEME=default
 export XKB_DEFAULT_LAYOUT=us,ara
 export XKB_DEFAULT_OPTIONS=grp:shift_caps_toggle,grp_led:scroll
-export QT_QPA_PLATFORM=wayland
-export GDK_BACKEND=wayland
-export SDL_VIDEODRIVER=wayland
-export MOZ_ENABLE_WAYLAND=1
+export QT_QPA_PLATFORM=xcb
+export GDK_BACKEND=x11
 EOF_BASHRC
 
 mkdir -p /etc/profile.d
@@ -276,10 +290,8 @@ export XCURSOR_PATH=/usr/share/icons
 export XCURSOR_THEME=default
 export XKB_DEFAULT_LAYOUT=us,ara
 export XKB_DEFAULT_OPTIONS=grp:shift_caps_toggle,grp_led:scroll
-export QT_QPA_PLATFORM=wayland
-export GDK_BACKEND=wayland
-export SDL_VIDEODRIVER=wayland
-export MOZ_ENABLE_WAYLAND=1
+export QT_QPA_PLATFORM=xcb
+export GDK_BACKEND=x11
 EOF_PROFILE
 chmod +x /etc/profile.d/winland.sh
 
@@ -296,4 +308,4 @@ EOF
 apt-get update
 apt-get -yq install firefox || true
 
-echo "Setup Finished. Xfce Wayland (LabWC) environment is ready natively."
+echo "Setup Finished. Xfce X11 (LabWC) environment is ready natively."
