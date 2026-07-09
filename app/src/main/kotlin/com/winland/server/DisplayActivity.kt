@@ -184,6 +184,12 @@ class DisplayActivity : ComponentActivity() {
     private var clipboardListenerRegistered = false
     @Volatile
     private var isActivityForeground = false
+
+    private var lastClipboardGen: Long = 0L
+    private var lastImeState: Boolean = false
+    private val clipboardPoller = Runnable { pollClipboardSync() }
+    private val imePoller = Runnable { pollImeSync() }
+    private val pollHandler = android.os.Handler(android.os.Looper.getMainLooper())
     private val didRequestGuestStart = AtomicBoolean(false)
     private var isNativeBridgeInitialized = false
     private val primaryClipChangedListener = ClipboardManager.OnPrimaryClipChangedListener {
@@ -191,12 +197,7 @@ class DisplayActivity : ComponentActivity() {
             suppressNextClipboardSync = false
             return@OnPrimaryClipChangedListener
         }
-
-        // Android restricts clipboard access for background apps.
-        if (!isActivityForeground || !hasWindowFocus()) {
-            // Ignore silent sync to reduce error messages
-            return@OnPrimaryClipChangedListener
-        }
+        // Android 10+ returns null when background; the try handles it gracefully.
         try {
             clipboardManager.primaryClip?.getItemAt(0)?.text?.let { text ->
                 val value = text.toString()
@@ -204,6 +205,7 @@ class DisplayActivity : ComponentActivity() {
                     return@let
                 }
                 lastSyncedClipboardText = value
+                Log.i("DisplayActivity", "Clipboard changed, syncing to Wayland len=${value.length}")
                 NativeBridge.sendClipboardTextToWayland(value)
             }
         } catch (e: Exception) {
@@ -621,6 +623,24 @@ class DisplayActivity : ComponentActivity() {
             clipboardManager.addPrimaryClipChangedListener(primaryClipChangedListener)
             clipboardListenerRegistered = true
         }
+        // Catch clipboard copies that happened while the app was backgrounded.
+        syncAndroidClipboardToWayland()
+    }
+
+    private fun syncAndroidClipboardToWayland() {
+        if (!isActivityForeground) return
+        try {
+            clipboardManager.primaryClip?.getItemAt(0)?.text?.let { text ->
+                val value = text.toString()
+                if (value != lastSyncedClipboardText && value.isNotEmpty()) {
+                    lastSyncedClipboardText = value
+                    Log.i("DisplayActivity", "Syncing Android clipboard to Wayland on resume len=${value.length}")
+                    NativeBridge.sendClipboardTextToWayland(value)
+                }
+            }
+        } catch (e: Exception) {
+            Log.w("DisplayActivity", "Clipboard read on resume denied", e)
+        }
     }
 
     private fun teardownClipboardListener() {
@@ -628,6 +648,43 @@ class DisplayActivity : ComponentActivity() {
             clipboardManager.removePrimaryClipChangedListener(primaryClipChangedListener)
             clipboardListenerRegistered = false
         }
+    }
+
+    private fun pollClipboardSync() {
+        if (!isActivityForeground) return
+        // Detect Android clipboard changes (catches copies while app is foreground).
+        syncAndroidClipboardToWayland()
+        val currentGen = try {
+            NativeBridge.getWaylandClipboardGen()
+        } catch (e: Exception) {
+            lastClipboardGen
+        }
+        if (currentGen > lastClipboardGen) {
+            lastClipboardGen = currentGen
+            val text = try {
+                NativeBridge.pollWaylandClipboard()
+            } catch (e: Exception) {
+                null
+            }
+            if (text != null && text.isNotEmpty()) {
+                updateAndroidClipboard(text)
+            }
+        }
+        pollHandler.postDelayed(clipboardPoller, 1000)
+    }
+
+    private fun pollImeSync() {
+        if (!isActivityForeground) return
+        val visible = try {
+            NativeBridge.pollImeVisible()
+        } catch (e: Exception) {
+            return
+        }
+        if (visible != lastImeState) {
+            lastImeState = visible
+            if (visible) showSoftKeyboard() else hideSoftKeyboard()
+        }
+        pollHandler.postDelayed(imePoller, 200)
     }
 
     // This could be called from NativeBridge.onWaylandClipboardChanged
@@ -678,6 +735,8 @@ class DisplayActivity : ComponentActivity() {
             isActivityForeground = true
             markAsCurrentActivity()
             setupClipboardListener()
+            pollHandler.post(clipboardPoller)
+            pollHandler.post(imePoller)
             // resumeRendering() is idempotent — it only flips RENDERING_ACTIVE to true.
             // The compositor also checks egl_surface validity before actually drawing,
             // so this is safe to call even if the EGL surface isn't ready yet.
@@ -695,6 +754,8 @@ class DisplayActivity : ComponentActivity() {
     override fun onStop() {
         traceLifecycle("onStop") {
             isActivityForeground = false
+            pollHandler.removeCallbacks(clipboardPoller)
+            pollHandler.removeCallbacks(imePoller)
             teardownClipboardListener()
             setNativeRenderingActiveAsync(active = false)
             clearCurrentActivityIfSelf()

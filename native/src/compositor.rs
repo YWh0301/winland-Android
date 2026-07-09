@@ -278,6 +278,7 @@ pub fn spawn(distro_id: &str) -> Result<(), String> {
                         }
                     }
                     JniCommand::UpdateClipboard { text } => {
+                        log::info!("[DD_DC] UpdateClipboard handler: re-setting clipboard as Compositor source len={}", text.len());
                         if let Some(server) = wayland_server.as_mut() {
                             if let Ok(mut guard) = server.runtime.clipboard_text.lock() {
                                 *guard = text.clone();
@@ -292,6 +293,9 @@ pub fn spawn(distro_id: &str) -> Result<(), String> {
                                 text,
                             );
                         }
+                    }
+                    JniCommand::WaylandClipboardToAndroid { text } => {
+                        crate::android::bridge_clipboard::set_clipboard_text(&text);
                     }
                     JniCommand::GetRuntimeStats { response } => {
                         let stats = crate::android::command_channel::get_runtime_stats();

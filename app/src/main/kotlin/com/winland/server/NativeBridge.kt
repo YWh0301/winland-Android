@@ -141,6 +141,9 @@ object NativeBridge {
     external fun getWaylandRuntimeStats(): String
     external fun getBackendSnapshot(): String
     external fun getLastNativeError(): String?
+    external fun pollWaylandClipboard(): String?
+    external fun getWaylandClipboardGen(): Long
+    external fun pollImeVisible(): Boolean
 
     fun setResolutionSafe(width: Int, height: Int) {
         if (width <= 0 || height <= 0) {

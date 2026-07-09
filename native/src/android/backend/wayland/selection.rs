@@ -15,13 +15,15 @@ impl SelectionHandler for AndroidSeatRuntime {
         &mut self,
         ty: SelectionTarget,
         source: Option<SelectionSource>,
-        seat: Seat<Self>,
+        _seat: Seat<Self>,
     ) {
+        log::info!("[DD_DC] new_selection called: ty={:?}, has_source={}", ty, source.is_some());
         if ty != SelectionTarget::Clipboard && ty != SelectionTarget::Primary {
             return;
         }
 
         let Some(source) = source else {
+            log::info!("[DD_DC] new_selection: source is None — clipboard cleared");
             return;
         };
 
@@ -43,11 +45,13 @@ impl SelectionHandler for AndroidSeatRuntime {
             }
         };
 
-        use smithay::wayland::selection::data_device::request_data_device_client_selection;
-        if let Err(e) = request_data_device_client_selection::<AndroidSeatRuntime>(&seat, mime, write_fd) {
-            log::warn!("Clipboard: request_data_device_client_selection failed: {:?}", e);
-            return;
-        }
+        // Read from the new source directly, not from the current clipboard.
+        // new_selection is called BEFORE set_clipboard_selection updates the
+        // seat state, so the current clipboard still points to the OLD source.
+        // Using source.send() avoids the false Err(ServerSideSelection/NoSelection)
+        // that request_data_device_client_selection would return when it reads
+        // the not-yet-updated seat clipboard.
+        source.send(mime, write_fd);
 
         let clipboard = self.clipboard_text.clone();
         std::thread::spawn(move || {
@@ -62,23 +66,15 @@ impl SelectionHandler for AndroidSeatRuntime {
                     if let Ok(mut guard) = clipboard.lock() {
                         *guard = text.clone();
                     }
-                    let Some(vm) = crate::java_vm() else { return; };
-                    let result = vm.attach_current_thread_permanently().and_then(|mut env| {
-                        let jstr = match env.new_string(&text) {
-                            Ok(s) => s,
-                            Err(_) => return Ok(()),
-                        };
-                        env.call_static_method(
-                            "com/winland/server/NativeBridge",
-                            "onWaylandClipboardChanged",
-                            "(Ljava/lang/String;)V",
-                            &[jni::objects::JValue::Object(jstr.as_ref())],
-                        )?;
-                        Ok(())
-                    });
-                    if let Err(e) = result {
-                        log::warn!("Clipboard: JNI onWaylandClipboardChanged failed: {}", e);
-                    }
+                    crate::android::bridge_clipboard::set_clipboard_text(&text);
+                    // Re-set clipboard as Compositor source so it survives client exit.
+                    let text_for_update = text.clone();
+                    crate::android::command_channel::send_command(
+                        crate::android::command_channel::JniCommand::UpdateClipboard { text: text_for_update },
+                    );
+                    crate::android::command_channel::send_command(
+                        crate::android::command_channel::JniCommand::WaylandClipboardToAndroid { text },
+                    );
                 }
             }
         });
@@ -92,6 +88,7 @@ impl SelectionHandler for AndroidSeatRuntime {
         _seat: Seat<Self>,
         user_data: &Self::SelectionUserData,
     ) {
+        log::info!("[DD_DC] send_selection called: ty={:?}, mime_type={}, user_data_len={}", ty, mime_type, user_data.len());
 use std::os::fd::{FromRawFd, IntoRawFd};
 
         if ty != SelectionTarget::Clipboard && ty != SelectionTarget::Primary {

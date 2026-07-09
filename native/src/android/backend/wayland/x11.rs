@@ -432,21 +432,10 @@ impl XwmHandler for AndroidSeatRuntime {
 
     fn allow_selection_access(
         &mut self,
-        xwm: XwmId,
+        _xwm: XwmId,
         _selection: smithay::wayland::selection::SelectionTarget,
     ) -> bool {
-        if let Some(keyboard) = self.keyboard.as_ref() {
-            if let Some(focus) = keyboard.current_focus() {
-                if let Some(window) = self.wl_to_window.get(&focus) {
-                    if let Some(surface) = window.x11_surface() {
-                        if surface.xwm_id().map_or(false, |id| id == xwm) {
-                            return true;
-                        }
-                    }
-                }
-            }
-        }
-        false
+        true
     }
 
     fn send_selection(
@@ -509,20 +498,10 @@ impl XwmHandler for AndroidSeatRuntime {
                     set_data_device_selection::<AndroidSeatRuntime>(
                         &dh, &seat, mime_types, text.clone(),
                     );
-                    let Some(vm) = crate::java_vm() else { return };
-                    let _ = vm.attach_current_thread_permanently().and_then(|mut env| {
-                        let jstr = match env.new_string(&text) {
-                            Ok(s) => s,
-                            Err(_) => return Ok(()),
-                        };
-                        env.call_static_method(
-                            "com/winland/server/NativeBridge",
-                            "onWaylandClipboardChanged",
-                            "(Ljava/lang/String;)V",
-                            &[jni::objects::JValue::Object(jstr.as_ref())],
-                        )?;
-                        Ok(())
-                    });
+                    crate::android::bridge_clipboard::set_clipboard_text(&text);
+                    crate::android::command_channel::send_command(
+                        crate::android::command_channel::JniCommand::WaylandClipboardToAndroid { text },
+                    );
                 }
             }
         });

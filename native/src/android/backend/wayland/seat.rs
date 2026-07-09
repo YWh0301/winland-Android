@@ -1565,19 +1565,5 @@ fn notify_android_ime(show: bool) {
     if LAST_IME_STATE.swap(show, Ordering::Relaxed) == show {
         return;
     }
-    let Some(vm) = crate::java_vm() else {
-        return;
-    };
-    let method = if show {
-        "onWaylandShowSoftKeyboard"
-    } else {
-        "onWaylandHideSoftKeyboard"
-    };
-    let result = vm.attach_current_thread_permanently().and_then(|mut env| {
-        env.call_static_method("com/winland/server/NativeBridge", method, "()V", &[])?;
-        Ok(())
-    });
-    if let Err(e) = result {
-        log::warn!("IME: JNI {} failed: {}", method, e);
-    }
+    crate::android::bridge_clipboard::set_ime_visible(show);
 }

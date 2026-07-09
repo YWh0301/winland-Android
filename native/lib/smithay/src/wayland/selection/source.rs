@@ -25,6 +25,15 @@ impl SelectionSource {
     pub fn mime_types(&self) -> Vec<String> {
         self.provider.mime_types()
     }
+
+    /// Send the data with the specified `mime_type` using the given `fd`.
+    ///
+    /// Used to read clipboard data from the source directly in the
+    /// compositor's `new_selection` callback, where the seat clipboard
+    /// has not yet been updated to point to this source.
+    pub fn send(&self, mime_type: String, fd: OwnedFd) {
+        self.provider.send(mime_type, fd);
+    }
 }
 
 /// Provider of the selection data.

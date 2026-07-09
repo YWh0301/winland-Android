@@ -62,6 +62,10 @@ pub enum JniCommand {
     SuspendRendering,
     ResumeRendering,
     UpdateClipboard { text: String },
+    /// Clipboard text flowing Wayland/X11 → Android.
+    /// Set from background threads, processed on compositor thread,
+    /// picked up by Kotlin polling via getWaylandClipboardGen / pollWaylandClipboard.
+    WaylandClipboardToAndroid { text: String },
 
     // ── Queries (with response) ──
     GetRuntimeStats {
