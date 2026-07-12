@@ -1,33 +1,17 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android"
-    xmlns:tools="http://schemas.android.com/tools">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <uses-permission android:name="android.permission.INTERNET" />
-    <uses-permission android:name="android.permission.WAKE_LOCK" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
-    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
-    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
-    <uses-permission android:name="android.permission.CAMERA" />
-    <uses-permission android:name="android.permission.RECORD_AUDIO" />
-    <uses-feature android:name="android.hardware.camera" android:required="false" />
-    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
-    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
-
-
+    <!-- Bridge-only test build: no network, storage, camera, microphone,
+         boot receiver, foreground service, or root-related permission. -->
     <application
         android:name=".WinlandApplication"
-        android:allowBackup="true"
-        android:dataExtractionRules="@xml/data_extraction_rules"
-        android:fullBackupContent="@xml/backup_rules"
+        android:allowBackup="false"
         android:icon="@mipmap/ic_launcher"
-        android:label="@string/app_name"
+        android:label="Padputer Wayland Bridge"
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
-        android:theme="@style/Theme.WinlandServer"
-        tools:targetApi="34">
-        
+        android:theme="@style/Theme.WinlandServer">
+
         <activity
             android:name=".MainActivity"
             android:exported="true"
@@ -48,35 +32,14 @@
             android:theme="@style/Theme.WinlandServer" />
 
         <activity
-            android:name=".TerminalActivity"
-            android:exported="false"
-            android:launchMode="singleTop"
-            android:configChanges="mcc|mnc|locale|touchscreen|keyboard|keyboardHidden|navigation|screenLayout|fontScale|uiMode|orientation|screenSize|smallestScreenSize|density|layoutDirection"
+            android:name=".AhbPresentTestActivity"
+            android:exported="true"
             android:screenOrientation="fullUser"
             android:theme="@style/Theme.WinlandServer" />
 
-        <!-- CleanupReceiver: unmounts chroot bind-mounts on device shutdown/reboot
-             to prevent kernel mount leaks affecting /sdcard and other paths. -->
-        <receiver
-            android:name=".CleanupReceiver"
-            android:exported="false">
-            <intent-filter>
-                <action android:name="android.intent.action.ACTION_SHUTDOWN" />
-                <action android:name="android.intent.action.REBOOT" />
-            </intent-filter>
-        </receiver>
-
-        <service
-            android:name=".WinlandService"
-            android:enabled="true"
+        <activity
+            android:name=".TerminalActivity"
             android:exported="false"
-            android:foregroundServiceType="specialUse">
-            <!-- Remove unexpected <property> injected by a library during manifest merge -->
-            <property
-                android:name="android.app.foreground_service_type_special_use"
-                tools:node="remove" />
-        </service>
-
+            android:enabled="false" />
     </application>
-
 </manifest>
