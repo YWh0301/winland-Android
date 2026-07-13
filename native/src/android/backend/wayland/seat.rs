@@ -325,16 +325,15 @@ impl AndroidSeatRuntime {
         });
         log::info!("SmithayRuntime: init stage=dmabuf_state");
         let mut dmabuf_state = DmabufState::new();
-            let dmabuf_formats = vec![
-                Format { code: Fourcc::Xbgr8888, modifier: Modifier::Linear },
-                Format { code: Fourcc::Xbgr8888, modifier: Modifier::Invalid },
-                Format { code: Fourcc::Xrgb8888, modifier: Modifier::Linear },
-                Format { code: Fourcc::Xrgb8888, modifier: Modifier::Invalid },
-                Format { code: Fourcc::Abgr8888, modifier: Modifier::Linear },
-                Format { code: Fourcc::Abgr8888, modifier: Modifier::Invalid },
-                Format { code: Fourcc::Argb8888, modifier: Modifier::Linear },
-                Format { code: Fourcc::Argb8888, modifier: Modifier::Invalid },
-            ];
+        // Advertise only combinations proven importable by the KGSL Turnip
+        // probe. Modifier::Invalid lets clients choose implementation-private
+        // layouts (for example UBWC) that the current bridge cannot negotiate.
+        let dmabuf_formats = vec![
+            Format { code: Fourcc::Xbgr8888, modifier: Modifier::Linear },
+            Format { code: Fourcc::Xrgb8888, modifier: Modifier::Linear },
+            Format { code: Fourcc::Abgr8888, modifier: Modifier::Linear },
+            Format { code: Fourcc::Argb8888, modifier: Modifier::Linear },
+        ];
         let dmabuf_global =
             dmabuf_state.create_global::<AndroidSeatRuntime>(
                 display, dmabuf_formats
