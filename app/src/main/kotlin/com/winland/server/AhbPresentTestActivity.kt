@@ -3,7 +3,6 @@ package com.winland.server
 import android.app.Activity
 import android.os.Bundle
 import android.util.Log
-import android.view.Surface
 import android.view.SurfaceHolder
 import android.view.SurfaceView
 import android.widget.FrameLayout
@@ -13,11 +12,6 @@ import kotlin.concurrent.thread
 /** Isolated validation activity for the Android-owned AHardwareBuffer bridge. */
 class AhbPresentTestActivity : Activity(), SurfaceHolder.Callback {
     private lateinit var status: TextView
-
-    companion object {
-        init { System.loadLibrary("ahb_present_test") }
-        @JvmStatic private external fun nativeRun(surface: Surface): Int
-    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -39,7 +33,7 @@ class AhbPresentTestActivity : Activity(), SurfaceHolder.Callback {
     override fun surfaceCreated(holder: SurfaceHolder) {
         status.text = "Waiting for Turnip producer on padputer-ahb-present"
         thread(name = "ahb-present-test") {
-            val result = nativeRun(holder.surface)
+            val result = AhbPresenterBridge.run(holder.surface)
             Log.i("AhbPresentTest", "nativeRun result=$result")
             runOnUiThread { status.text = if (result == 0) "AHB zero-copy EGL presentation succeeded" else "Native test failed: $result" }
         }

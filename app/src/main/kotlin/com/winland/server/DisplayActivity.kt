@@ -191,6 +191,7 @@ class DisplayActivity : ComponentActivity() {
     private val imePoller = Runnable { pollImeSync() }
     private val pollHandler = android.os.Handler(android.os.Looper.getMainLooper())
     private val didRequestGuestStart = AtomicBoolean(false)
+    private val didStartAhbPresenter = AtomicBoolean(false)
     private var isNativeBridgeInitialized = false
     private val primaryClipChangedListener = ClipboardManager.OnPrimaryClipChangedListener {
         if (suppressNextClipboardSync) {
@@ -215,6 +216,7 @@ class DisplayActivity : ComponentActivity() {
 
     private var distroId: String = "ubuntu"
     private var bridgeOnly: Boolean = false
+    private var ahbPresenter: Boolean = false
 
     private fun copyAssetTree(assetPath: String, destination: File) {
         val children = assets.list(assetPath) ?: emptyArray()
@@ -246,6 +248,7 @@ class DisplayActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         bridgeOnly = intent.getBooleanExtra("bridge_only", false)
+        ahbPresenter = intent.getBooleanExtra("ahb_presenter", false)
         distroId = intent.getStringExtra("distro_id") ?: "ubuntu"
         Log.i("WinlandDiag", "onCreate: Entry. Distro: $distroId. Native libraries loaded: ${NativeBridge.isLoaded()}")
         super.onCreate(savedInstanceState)
@@ -523,6 +526,18 @@ class DisplayActivity : ComponentActivity() {
                                 NativeBridge.setScrollSensitivity(prefs.getFloat("scroll_sensitivity", 1.0f))
                                 val inputPrefs = context.getSharedPreferences("winland_prefs", Context.MODE_PRIVATE)
                                 NativeBridge.setInputMode(inputPrefs.getInt("input_mode_mask", 1))
+                                if (bridgeOnly && ahbPresenter && didStartAhbPresenter.compareAndSet(false, true)) {
+                                    lifecycleScope.launch(Dispatchers.IO) {
+                                        // Keep the Smithay protocol/frame loop alive but release its
+                                        // direct EGL/ANativeWindow target before the AHB presenter
+                                        // takes ownership of the same Surface.
+                                        NativeBridge.suspendRendering()
+                                        delay(200)
+                                        NativeBridge.resumeRendering()
+                                        val result = AhbPresenterBridge.run(holder.surface)
+                                        Log.i("DisplayActivity", "AHB bridge presenter exited result=$result")
+                                    }
+                                }
                                 if (!bridgeOnly && didRequestGuestStart.compareAndSet(false, true)) {
                                     lifecycleScope.launch(Dispatchers.IO) {
                                         Log.i("WinlandDiag", "Guest Start: Waiting for Wayland socket probe...")
