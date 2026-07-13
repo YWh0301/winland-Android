@@ -427,6 +427,34 @@ impl ShmRegion {
 }
 
 #[derive(Debug)]
+struct PresentationSlotTracker {
+    frames: [Option<u64>; 3],
+    next: usize,
+}
+
+impl PresentationSlotTracker {
+    fn new() -> Self { Self { frames: [None, None, None], next: 0 } }
+
+    fn acquire(&mut self, frame_id: u64) -> Option<usize> {
+        for offset in 0..self.frames.len() {
+            let slot = (self.next + offset) % self.frames.len();
+            if self.frames[slot].is_none() {
+                self.frames[slot] = Some(frame_id);
+                self.next = (slot + 1) % self.frames.len();
+                return Some(slot);
+            }
+        }
+        None
+    }
+
+    fn release(&mut self, slot: usize, frame_id: u64) -> bool {
+        if self.frames.get(slot).copied().flatten() != Some(frame_id) { return false; }
+        self.frames[slot] = None;
+        true
+    }
+}
+
+#[derive(Debug)]
 pub struct AndroidSmithayState {
     pub native_window: Option<*mut ndk_sys::ANativeWindow>,
     pub egl_display: Option<egl::EGLDisplay>,
@@ -467,6 +495,7 @@ pub struct AndroidSmithayState {
     /// Fragment shader for DMA-BUF textures (no BGR swap)
     pub gl_dmabuf_program: Option<u32>,
     pub gl_cursor_dmabuf_program: Option<u32>,
+    presentation_slots: PresentationSlotTracker,
 }
 
 impl AndroidSmithayState {
@@ -498,6 +527,7 @@ impl AndroidSmithayState {
             gl_egl_image_target_texture_2d_oes: None,
             gl_dmabuf_program: None,
             gl_cursor_dmabuf_program: None,
+            presentation_slots: PresentationSlotTracker::new(),
         }
     }
 }
@@ -558,8 +588,15 @@ pub(crate) fn flush_deferred_composite(
         latest = Some(frame);
     }
     if let Some(frame) = latest {
-        log::debug!("presenting deferred compositor frame {} ({} items)", frame.id, frame.items.len());
+        let Some(slot) = state.presentation_slots.acquire(frame.id) else {
+            log::warn!("dropping compositor frame {}: all presentation slots busy", frame.id);
+            return;
+        };
+        log::debug!("presenting deferred compositor frame {} in slot {} ({} items)", frame.id, slot, frame.items.len());
         composite_multi(state, &frame.items);
+        if !state.presentation_slots.release(slot, frame.id) {
+            log::error!("presentation slot/frame mismatch: slot={} frame={}", slot, frame.id);
+        }
     }
 }
 
