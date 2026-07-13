@@ -214,8 +214,38 @@ class DisplayActivity : ComponentActivity() {
     }
 
     private var distroId: String = "ubuntu"
+    private var bridgeOnly: Boolean = false
+
+    private fun copyAssetTree(assetPath: String, destination: File) {
+        val children = assets.list(assetPath) ?: emptyArray()
+        if (children.isEmpty()) {
+            destination.parentFile?.mkdirs()
+            assets.open(assetPath).use { input ->
+                destination.outputStream().buffered().use { output -> input.copyTo(output) }
+            }
+            return
+        }
+
+        destination.mkdirs()
+        children.forEach { child ->
+            copyAssetTree("$assetPath/$child", File(destination, child))
+        }
+    }
+
+    private fun ensureBridgeXkbData() {
+        val xkbDir = File(filesDir, "rootfs_bridge/usr/share/X11/xkb")
+        val marker = File(xkbDir, ".padputer-xkb-ready")
+        if (marker.isFile) return
+
+        Log.i("DisplayActivity", "bridge-only: installing bundled XKB data into app-private storage")
+        xkbDir.deleteRecursively()
+        copyAssetTree("xkb", xkbDir)
+        check(File(xkbDir, "rules/evdev").isFile) { "Bundled XKB rules are incomplete" }
+        marker.writeText("xkeyboard-config\n")
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        bridgeOnly = intent.getBooleanExtra("bridge_only", false)
         distroId = intent.getStringExtra("distro_id") ?: "ubuntu"
         Log.i("WinlandDiag", "onCreate: Entry. Distro: $distroId. Native libraries loaded: ${NativeBridge.isLoaded()}")
         super.onCreate(savedInstanceState)
@@ -434,18 +464,34 @@ class DisplayActivity : ComponentActivity() {
                                 return@setupLifecycle
                             }
 
-                            // --- [Winland OS: Pre-flight Environment Validation] ---
-                            val status = withContext(Dispatchers.IO) {
-                                ChrootInstaller.getChrootStatus(context, distroId)
-                            }
-                            if (!status.ready) {
-                                val err = "Environment not ready: ${status.reason}"
-                                Log.e("DisplayActivity", err)
-                                withContext(Dispatchers.Main) {
-                                    Toast.makeText(context, err, Toast.LENGTH_LONG).show()
+                            // The upstream app normally refuses to create its Wayland
+                            // parent compositor until its own managed rootfs is ready.
+                            // Padputer bridge-only mode deliberately owns no rootfs and
+                            // executes no root command; an external, audited harness will
+                            // connect clients to the socket later.
+                            if (bridgeOnly) {
+                                val xkbReady = withContext(Dispatchers.IO) {
+                                    runCatching { ensureBridgeXkbData() }
                                 }
-                                handleNativeInitFailure(err)
-                                return@setupLifecycle
+                                if (xkbReady.isFailure) {
+                                    val err = "Bridge XKB setup failed: ${xkbReady.exceptionOrNull()?.message}"
+                                    Log.e("DisplayActivity", err, xkbReady.exceptionOrNull())
+                                    handleNativeInitFailure(err)
+                                    return@setupLifecycle
+                                }
+                            } else {
+                                val status = withContext(Dispatchers.IO) {
+                                    ChrootInstaller.getChrootStatus(context, distroId)
+                                }
+                                if (!status.ready) {
+                                    val err = "Environment not ready: ${status.reason}"
+                                    Log.e("DisplayActivity", err)
+                                    withContext(Dispatchers.Main) {
+                                        Toast.makeText(context, err, Toast.LENGTH_LONG).show()
+                                    }
+                                    handleNativeInitFailure(err)
+                                    return@setupLifecycle
+                                }
                             }
 
 
@@ -477,7 +523,7 @@ class DisplayActivity : ComponentActivity() {
                                 NativeBridge.setScrollSensitivity(prefs.getFloat("scroll_sensitivity", 1.0f))
                                 val inputPrefs = context.getSharedPreferences("winland_prefs", Context.MODE_PRIVATE)
                                 NativeBridge.setInputMode(inputPrefs.getInt("input_mode_mask", 1))
-                                if (didRequestGuestStart.compareAndSet(false, true)) {
+                                if (!bridgeOnly && didRequestGuestStart.compareAndSet(false, true)) {
                                     lifecycleScope.launch(Dispatchers.IO) {
                                         Log.i("WinlandDiag", "Guest Start: Waiting for Wayland socket probe...")
 

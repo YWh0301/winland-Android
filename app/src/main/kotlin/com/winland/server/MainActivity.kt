@@ -109,6 +109,26 @@ class MainActivity : ComponentActivity() {
         traceLifecycle("onCreate") {
             super.onCreate(savedInstanceState)
 
+            // Padputer bridge-only mode: expose only the audited Android
+            // SurfaceView + Smithay parent compositor. Do not start the
+            // foreground service, audio bridge, downloader, root checker, or
+            // chroot manager. This mode is launched explicitly over ADB.
+            if (intent.getBooleanExtra("bridge_only", false)) {
+                lifecycleScope.launch {
+                    if (!NativeBridge.awaitLibrariesLoaded(30_000L)) {
+                        Log.e(TAG, "Bridge-only launch aborted: native libraries failed to load")
+                        finish()
+                        return@launch
+                    }
+                    startActivity(Intent(this@MainActivity, DisplayActivity::class.java).apply {
+                        putExtra("bridge_only", true)
+                        putExtra("distro_id", "bridge")
+                    })
+                    finish()
+                }
+                return@traceLifecycle
+            }
+
             enableEdgeToEdge()
 
             if (!NativeBridge.isLoaded()) {
