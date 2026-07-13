@@ -268,7 +268,7 @@ pub struct AndroidSeatRuntime {
     pub(crate) fullscreen_restore:
         HashMap<WlSurface, smithay::utils::Rectangle<i32, smithay::utils::Logical>>,
     pub(crate) render_sender:
-        crossbeam_channel::Sender<Vec<crate::android::backend::smithay_backend::RenderItem>>,
+        crossbeam_channel::Sender<crate::android::backend::smithay_backend::RenderFrame>,
     pub(crate) clipboard_text: Arc<Mutex<String>>,
     pub(crate) last_activation_serial: Option<Serial>,
     pub(crate) trackpad_anchor: Option<(f32, f32)>,
@@ -301,9 +301,7 @@ impl AndroidSeatRuntime {
         display: &DisplayHandle,
         width: i32,
         height: i32,
-        render_sender: crossbeam_channel::Sender<
-            Vec<crate::android::backend::smithay_backend::RenderItem>,
-        >,
+        render_sender: crossbeam_channel::Sender<crate::android::backend::smithay_backend::RenderFrame>,
     ) -> Result<Self, String> {
         log::info!("SmithayRuntime: init stage=compositor_state");
         let compositor_state =
@@ -1124,6 +1122,22 @@ impl AndroidSeatRuntime {
         })
     }
 
+    /// Render and complete pending frame callbacks on the compositor frame clock.
+    pub(crate) fn frame_tick(&mut self) {
+        self.render_all();
+        for elem in self.space.elements() {
+            if let Some(wl_surface) = elem.0.wl_surface() {
+                Self::send_frame_callback(wl_surface.as_ref());
+                for (popup, _) in PopupManager::popups_for_surface(wl_surface.as_ref()) {
+                    Self::send_frame_callback(popup.wl_surface());
+                }
+            }
+        }
+        for surface in &self.unmanaged_surfaces {
+            Self::send_frame_callback(surface);
+        }
+    }
+
     pub(crate) fn render_all(&mut self) {
         if !engine_timing::is_rendering_active() {
             return;
@@ -1138,7 +1152,7 @@ impl AndroidSeatRuntime {
 
         static RENDER_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let frame = RENDER_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let log_this = frame < 300 || frame % 60 == 0;
+        let log_this = frame < 20 || frame % 600 == 0;
 
         if log_this {
             log::info!(
@@ -1500,20 +1514,12 @@ impl AndroidSeatRuntime {
         }
 
         if !render_list.is_empty() {
-            let _ = self.render_sender.send(render_list);
+            let _ = self.render_sender.send(crate::android::backend::smithay_backend::RenderFrame {
+                id: frame,
+                items: render_list,
+            });
         }
 
-        for elem in self.space.elements() {
-            if let Some(wl_surface) = elem.0.wl_surface() {
-                Self::send_frame_callback(wl_surface.as_ref());
-                for (popup, _) in PopupManager::popups_for_surface(wl_surface.as_ref()) {
-                    Self::send_frame_callback(popup.wl_surface());
-                }
-            }
-        }
-        for s in &self.unmanaged_surfaces {
-            Self::send_frame_callback(s);
-        }
     }
 }
 

@@ -175,9 +175,9 @@ pub struct WaylandServer {
 
 #[cfg(feature = "smithay_android")]
 impl WaylandServer {
-    pub fn bind(
+    pub(crate) fn bind(
         socket_dir: &Path,
-        render_sender: crossbeam_channel::Sender<Vec<crate::android::backend::smithay_backend::RenderItem>>,
+        render_sender: crossbeam_channel::Sender<crate::android::backend::smithay_backend::RenderFrame>,
     ) -> Result<Self, String> {
         std::env::set_var("XDG_RUNTIME_DIR", socket_dir);
         std::env::set_var("WAYLAND_DISPLAY", "wayland-0");

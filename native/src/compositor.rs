@@ -8,7 +8,7 @@ use std::fs;
 use std::os::unix::fs::FileTypeExt;
 use std::ptr;
 
-use crate::android::backend::smithay_backend::{AndroidSmithayState, flush_deferred_composite, render_background_tick, RenderItem};
+use crate::android::backend::smithay_backend::{AndroidSmithayState, flush_deferred_composite, render_background_tick, RenderFrame};
 use crate::android::backend::wayland::input::{InputRouter, RoutedInputEvent};
 use crate::android::backend::wayland::seat::WinlandInputMode;
 use crate::android::command_channel::{JniCommand, set_command_tx};
@@ -62,7 +62,7 @@ pub fn spawn(distro_id: &str) -> Result<(), String> {
     let thread_running = Arc::clone(&running);
     let thread_socket_dir = socket_dir.clone();
     let (startup_tx, startup_rx) = mpsc::channel::<Result<(), String>>();
-    let (render_tx, render_rx) = crossbeam_channel::unbounded::<Vec<RenderItem>>();
+    let (render_tx, render_rx) = crossbeam_channel::unbounded::<RenderFrame>();
 
     let worker = thread::spawn(move || {
         let mut wayland_server = match crate::android::backend::wayland::smithay_runtime::WaylandServer::bind(
@@ -103,6 +103,7 @@ pub fn spawn(distro_id: &str) -> Result<(), String> {
 
         let mut backend_state = AndroidSmithayState::new();
         let mut input_router = InputRouter::default();
+        let mut last_frame_tick = std::time::Instant::now();
         log::info!("Compositor: runtime loop started");
 
         while thread_running.load(Ordering::Relaxed) {
@@ -329,8 +330,17 @@ pub fn spawn(distro_id: &str) -> Result<(), String> {
                 }
 
                 server.pump();
-                crate::android::command_channel::set_clients_connected(server.connected_client_count() > 0);
-                server.runtime.render_all();
+                let connected = server.connected_client_count() > 0;
+                crate::android::command_channel::set_clients_connected(connected);
+                if connected {
+                    let frame_interval = Duration::from_secs_f32(
+                        1.0 / backend_state.refresh_rate.clamp(30.0, 240.0),
+                    );
+                    if last_frame_tick.elapsed() >= frame_interval {
+                        server.runtime.frame_tick();
+                        last_frame_tick = std::time::Instant::now();
+                    }
+                }
             }
             flush_deferred_composite(&mut backend_state, &render_rx);
             render_background_tick(&backend_state);
@@ -370,9 +380,10 @@ pub fn spawn(distro_id: &str) -> Result<(), String> {
                 crate::android::command_channel::set_runtime_stats(stats);
             }
 
-            // Smart sleep: yield when clients are rendering, sleep when idle
-            if wayland_server.as_mut().map_or(false, |s| s.connected_client_count() > 0) {
-                std::thread::yield_now();
+            // Keep pumping connected clients without busy-spinning. Rendering is
+            // driven by surface commits/input/output changes, not every poll.
+            if wayland_server.as_mut().is_some_and(|s| s.connected_client_count() > 0) {
+                thread::sleep(Duration::from_millis(1));
             } else {
                 thread::sleep(Duration::from_millis(8));
             }

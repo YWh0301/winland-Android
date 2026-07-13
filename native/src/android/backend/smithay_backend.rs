@@ -29,7 +29,7 @@ fn cpu_read_dmabuf(fd: i32, offset: usize, stride: usize, width: usize, height: 
 
 /// Render multiple surfaces in a single GLES pass with proper compositing.
 /// The caller owns the state (on the compositor thread) and passes it by reference.
-pub fn composite_multi(state: &mut AndroidSmithayState, surfaces: &[RenderItem]) {
+pub(crate) fn composite_multi(state: &mut AndroidSmithayState, surfaces: &[RenderItem]) {
     if surfaces.is_empty() {
         return;
     }
@@ -505,6 +505,11 @@ impl AndroidSmithayState {
 // SAFETY: The state is owned by the compositor thread (single-thread access).
 unsafe impl Send for AndroidSmithayState {}
 
+pub(crate) struct RenderFrame {
+    pub(crate) id: u64,
+    pub(crate) items: Vec<RenderItem>,
+}
+
 pub(crate) enum RenderItem {
     Shm {
         pixels: Vec<u8>,
@@ -542,16 +547,19 @@ impl RenderItem {
 /// Drain the render-item channel and composite everything.
 /// The compositor thread owns the receiver; the Wayland thread sends
 /// items via its sender (stored on `AndroidSeatRuntime`).
-pub fn flush_deferred_composite(
+pub(crate) fn flush_deferred_composite(
     state: &mut AndroidSmithayState,
-    rx: &crossbeam_channel::Receiver<Vec<RenderItem>>,
+    rx: &crossbeam_channel::Receiver<RenderFrame>,
 ) {
-    let mut all_items: Vec<RenderItem> = Vec::new();
-    while let Ok(items) = rx.try_recv() {
-        all_items.extend(items);
+    // Keep only the newest complete compositor frame. Merging queued Vecs
+    // duplicates surfaces and destroys frame/damage boundaries.
+    let mut latest: Option<RenderFrame> = None;
+    while let Ok(frame) = rx.try_recv() {
+        latest = Some(frame);
     }
-    if !all_items.is_empty() {
-        composite_multi(state, &all_items);
+    if let Some(frame) = latest {
+        log::debug!("presenting deferred compositor frame {} ({} items)", frame.id, frame.items.len());
+        composite_multi(state, &frame.items);
     }
 }
 
@@ -636,6 +644,21 @@ fn release_native_window_inner(state: &mut AndroidSmithayState) {
 pub fn bind_native_window(state: &mut AndroidSmithayState, native_window_ptr: *mut ndk_sys::ANativeWindow) -> Result<(), String> {
     if native_window_ptr.is_null() {
         return Err("ANativeWindow pointer is null".to_string());
+    }
+
+    // SurfaceChanged can be emitted before the compositor command channel is
+    // installed. ANativeWindow is authoritative once bound, so initialize the
+    // render target dimensions here as well.
+    let window_width = unsafe { ndk_sys::ANativeWindow_getWidth(native_window_ptr) };
+    let window_height = unsafe { ndk_sys::ANativeWindow_getHeight(native_window_ptr) };
+    if window_width > 0 && window_height > 0 {
+        state.surface_size = (window_width, window_height);
+        crate::android::command_channel::set_surface_size(window_width, window_height);
+        log::info!(
+            "Android backend: render target size initialized from ANativeWindow: {}x{}",
+            window_width,
+            window_height
+        );
     }
 
     // ── Fast-path: context already alive, just create a new surface ──
