@@ -681,10 +681,17 @@ pub(crate) fn flush_deferred_composite(
             return;
         };
         log::debug!("presenting deferred compositor frame {} in slot {} ({} items)", frame.id, slot, frame.items.len());
-        if frame.items.len() == 1 {
-            let _ = state.source_broker.send(slot, &frame.items[0]);
+        let brokered = frame.items.len() == 1 &&
+            state.source_broker.send(slot, &frame.items[0]).is_some();
+        if brokered {
+            // The app-domain Turnip worker owns composition into the Android
+            // AHB slot. Never also mmap/upload this DMA-BUF through the legacy
+            // direct presenter: that would reintroduce the CPU pixel path and
+            // race two presentation backends for the same frame.
+            log::debug!("deferred compositor frame {} handed to AHB worker", frame.id);
+        } else {
+            composite_multi(state, &frame.items);
         }
-        composite_multi(state, &frame.items);
         if !state.presentation_slots.release(slot, frame.id) {
             log::error!("presentation slot/frame mismatch: slot={} frame={}", slot, frame.id);
         }
