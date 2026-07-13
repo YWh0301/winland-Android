@@ -1,3 +1,6 @@
+use nix::sys::socket::{connect, sendmsg, AddressFamily, ControlMessage, MsgFlags, SockFlag, SockType, UnixAddr};
+use std::io::IoSlice;
+use std::os::fd::{AsRawFd, OwnedFd};
 
 fn cpu_read_dmabuf(fd: i32, offset: usize, stride: usize, width: usize, height: usize) -> Option<Vec<u8>> {
     let map_len = offset + stride * height;
@@ -377,7 +380,6 @@ use libloading::Library;
 use nix::sys::memfd::{memfd_create, MFdFlags};
 use nix::unistd::ftruncate;
 use std::ffi::CString;
-use std::os::fd::{AsRawFd, OwnedFd};
 use libc;
 
 const EGL_NONE: i32 = 0x3038;
@@ -423,6 +425,86 @@ pub struct ShmRegion {
 impl ShmRegion {
     pub fn fd(&self) -> i32 {
         self.fd.as_raw_fd()
+    }
+}
+
+const AHB_PROTOCOL_MAGIC: u32 = 0x5041_4842;
+const AHB_PROTOCOL_VERSION: u16 = 1;
+const AHB_FRAME_SOURCE: u16 = 8;
+const AHB_SOURCE_LINEAR: u32 = 1;
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct AhbFrameSourceMessage {
+    magic: u32,
+    version: u16,
+    message_type: u16,
+    slot: u32,
+    generation: u32,
+    frame_id: u64,
+    width: u32,
+    height: u32,
+    format: u32,
+    stride: u32,
+    fd_count: u32,
+    flags: u32,
+}
+
+const _: () = assert!(std::mem::size_of::<AhbFrameSourceMessage>() == 48);
+
+#[derive(Debug)]
+struct FrameSourceBroker {
+    socket: Option<OwnedFd>,
+    next_frame_id: u64,
+}
+
+impl FrameSourceBroker {
+    fn new() -> Self { Self { socket: None, next_frame_id: 1 } }
+
+    fn ensure_connected(&mut self) -> bool {
+        if self.socket.is_some() { return true; }
+        let Ok(socket) = nix::sys::socket::socket(
+            AddressFamily::Unix, SockType::SeqPacket, SockFlag::SOCK_CLOEXEC, None,
+        ) else { return false; };
+        let Ok(address) = UnixAddr::new_abstract(b"padputer-frame-source") else { return false; };
+        if connect(socket.as_raw_fd(), &address).is_err() { return false; }
+        log::info!("FRAME_SOURCE broker connected");
+        self.socket = Some(socket);
+        true
+    }
+
+    fn send(&mut self, slot: usize, item: &RenderItem) -> Option<u64> {
+        let RenderItem::DmaBuf { fd, fourcc, modifier, offset, stride, width, height,
+                                 scale, is_cursor, .. } = item else { return None; };
+        if *modifier != 0 || *offset != 0 || *width <= 0 || *height <= 0 ||
+           *scale != 1.0 || *is_cursor || !self.ensure_connected() { return None; }
+        let frame_id = self.next_frame_id;
+        let packet = AhbFrameSourceMessage {
+            magic: AHB_PROTOCOL_MAGIC, version: AHB_PROTOCOL_VERSION,
+            message_type: AHB_FRAME_SOURCE, slot: slot as u32, generation: 1,
+            frame_id, width: *width as u32, height: *height as u32,
+            format: *fourcc, stride: *stride, fd_count: 1, flags: AHB_SOURCE_LINEAR,
+        };
+        let bytes = unsafe {
+            std::slice::from_raw_parts((&packet as *const AhbFrameSourceMessage).cast::<u8>(), std::mem::size_of_val(&packet))
+        };
+        let iov = [IoSlice::new(bytes)];
+        let fds = [fd.as_raw_fd()];
+        let controls = [ControlMessage::ScmRights(&fds)];
+        let socket = self.socket.as_ref().unwrap();
+        match sendmsg::<()>(socket.as_raw_fd(), &iov, &controls, MsgFlags::empty(), None) {
+            Ok(written) if written == bytes.len() => {
+                self.next_frame_id += 1;
+                log::info!("FRAME_SOURCE sent compositor DMA-BUF as frame={} slot={} {}x{} fourcc=0x{:x} stride={}",
+                           frame_id, slot, width, height, fourcc, stride);
+                Some(frame_id)
+            }
+            result => {
+                log::warn!("FRAME_SOURCE send failed: {:?}", result);
+                self.socket = None;
+                None
+            }
+        }
     }
 }
 
@@ -496,6 +578,7 @@ pub struct AndroidSmithayState {
     pub gl_dmabuf_program: Option<u32>,
     pub gl_cursor_dmabuf_program: Option<u32>,
     presentation_slots: PresentationSlotTracker,
+    source_broker: FrameSourceBroker,
 }
 
 impl AndroidSmithayState {
@@ -528,6 +611,7 @@ impl AndroidSmithayState {
             gl_dmabuf_program: None,
             gl_cursor_dmabuf_program: None,
             presentation_slots: PresentationSlotTracker::new(),
+            source_broker: FrameSourceBroker::new(),
         }
     }
 }
@@ -593,6 +677,9 @@ pub(crate) fn flush_deferred_composite(
             return;
         };
         log::debug!("presenting deferred compositor frame {} in slot {} ({} items)", frame.id, slot, frame.items.len());
+        if frame.items.len() == 1 {
+            let _ = state.source_broker.send(slot, &frame.items[0]);
+        }
         composite_multi(state, &frame.items);
         if !state.presentation_slots.release(slot, frame.id) {
             log::error!("presentation slot/frame mismatch: slot={} frame={}", slot, frame.id);
