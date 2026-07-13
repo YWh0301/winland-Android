@@ -467,7 +467,10 @@ impl FrameSourceBroker {
             AddressFamily::Unix, SockType::SeqPacket, SockFlag::SOCK_CLOEXEC, None,
         ) else { return false; };
         let Ok(address) = UnixAddr::new_abstract(b"padputer-frame-source") else { return false; };
-        if connect(socket.as_raw_fd(), &address).is_err() { return false; }
+        if let Err(error) = connect(socket.as_raw_fd(), &address) {
+            log::debug!("FRAME_SOURCE broker unavailable: {}", error);
+            return false;
+        }
         log::info!("FRAME_SOURCE broker connected");
         self.socket = Some(socket);
         true
@@ -475,13 +478,14 @@ impl FrameSourceBroker {
 
     fn send(&mut self, slot: usize, item: &RenderItem) -> Option<u64> {
         let RenderItem::DmaBuf { fd, fourcc, modifier, offset, stride, width, height,
-                                 scale, is_cursor, .. } = item else { return None; };
+                                 is_cursor, .. } = item else { return None; };
         if *modifier != 0 || *offset != 0 || *width <= 0 || *height <= 0 ||
-           *scale != 1.0 || *is_cursor || !self.ensure_connected() { return None; }
+           *is_cursor || !self.ensure_connected() { return None; }
         let frame_id = self.next_frame_id;
+        let wire_slot = ((frame_id - 1) % 3) as u32;
         let packet = AhbFrameSourceMessage {
             magic: AHB_PROTOCOL_MAGIC, version: AHB_PROTOCOL_VERSION,
-            message_type: AHB_FRAME_SOURCE, slot: slot as u32, generation: 1,
+            message_type: AHB_FRAME_SOURCE, slot: wire_slot, generation: 1,
             frame_id, width: *width as u32, height: *height as u32,
             format: *fourcc, stride: *stride, fd_count: 1, flags: AHB_SOURCE_LINEAR,
         };
@@ -495,8 +499,8 @@ impl FrameSourceBroker {
         match sendmsg::<()>(socket.as_raw_fd(), &iov, &controls, MsgFlags::empty(), None) {
             Ok(written) if written == bytes.len() => {
                 self.next_frame_id += 1;
-                log::info!("FRAME_SOURCE sent compositor DMA-BUF as frame={} slot={} {}x{} fourcc=0x{:x} stride={}",
-                           frame_id, slot, width, height, fourcc, stride);
+                log::info!("FRAME_SOURCE sent compositor DMA-BUF as frame={} wire_slot={} compositor_slot={} {}x{} fourcc=0x{:x} stride={}",
+                           frame_id, wire_slot, slot, width, height, fourcc, stride);
                 Some(frame_id)
             }
             result => {
