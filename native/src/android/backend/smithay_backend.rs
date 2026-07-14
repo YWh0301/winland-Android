@@ -777,8 +777,15 @@ pub(crate) fn flush_deferred_composite(
                 log::debug!("dropping compositor frame {}: AHB slots await FRAME_CONSUMED", frame.id);
             }
             BrokerSendResult::Unsupported | BrokerSendResult::Unavailable => {
-                composite_multi(state, &frame.items);
-                let _ = state.presentation_sender.send(frame.id);
+                if state.native_window.is_some() {
+                    composite_multi(state, &frame.items);
+                    let _ = state.presentation_sender.send(frame.id);
+                } else {
+                    // AHB mode deliberately relinquishes the direct EGL window.
+                    // Without a worker there is no presentation completion, so
+                    // do not fabricate callbacks for a frame that was not shown.
+                    log::debug!("dropping compositor frame {}: no active presentation backend", frame.id);
+                }
             }
         }
         if !state.presentation_slots.release(slot, frame.id) {
