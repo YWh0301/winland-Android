@@ -44,7 +44,7 @@ use smithay::wayland::compositor::CompositorState;
 #[cfg(feature = "smithay_android")]
 use smithay::wayland::cursor_shape::CursorShapeManagerState;
 #[cfg(feature = "smithay_android")]
-use smithay::wayland::dmabuf::{DmabufGlobal, DmabufState};
+use smithay::wayland::dmabuf::{DmabufFeedbackBuilder, DmabufGlobal, DmabufState};
 #[cfg(feature = "smithay_android")]
 use smithay::wayland::ext_workspace::{ExtWorkspaceHandler, ExtWorkspaceManagerState};
 #[cfg(feature = "smithay_android")]
@@ -310,7 +310,7 @@ impl AndroidSeatRuntime {
     ) -> Result<Self, String> {
         log::info!("SmithayRuntime: init stage=compositor_state");
         let compositor_state =
-            init_stage("compositor_state", || CompositorState::new::<Self>(display));
+            init_stage("compositor_state", || CompositorState::new_v6::<Self>(display));
         log::info!("SmithayRuntime: init stage=shm_state");
         let shm_state = init_stage("shm_state", || {
             let formats = vec![
@@ -339,10 +339,19 @@ impl AndroidSeatRuntime {
             Format { code: Fourcc::Abgr8888, modifier: Modifier::Linear },
             Format { code: Fourcc::Argb8888, modifier: Modifier::Linear },
         ];
-        let dmabuf_global =
-            dmabuf_state.create_global::<AndroidSeatRuntime>(
-                display, dmabuf_formats
-            );
+        // Aquamarine requires linux-dmabuf v4 feedback and resolves the tranche
+        // device through libdrm. Use Android's real render-node identity as the
+        // allocation hint while still advertising only KGSL-proven LINEAR formats.
+        // The bridge never opens or modesets this node.
+        // SELinux denies stat(2) on graphics_device from the app domain even
+        // though the node identity is fixed and visible in Android's device
+        // namespace. Encode renderD128's real 226:128 dev_t directly.
+        let render_device = 0xe280 as nix::libc::dev_t;
+        let dmabuf_feedback = DmabufFeedbackBuilder::new(render_device, dmabuf_formats)
+            .build()
+            .map_err(|error| format!("failed to build KGSL dmabuf feedback: {error:?}"))?;
+        let dmabuf_global = dmabuf_state
+            .create_global_with_default_feedback::<AndroidSeatRuntime>(display, &dmabuf_feedback);
         log::info!("SmithayRuntime: init stage=layer_shell_state");
         let layer_shell_state = init_stage("layer_shell_state", || {
             WlrLayerShellState::new::<Self>(display)
