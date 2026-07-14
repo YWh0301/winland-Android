@@ -465,7 +465,8 @@ enum BrokerSendResult {
 struct FrameSourceBroker {
     socket: Option<OwnedFd>,
     next_frame_id: u64,
-    in_flight: [Option<u64>; 3],
+    /// wire frame ID and originating compositor RenderFrame ID per AHB slot.
+    in_flight: [Option<(u64, u64)>; 3],
 }
 
 impl FrameSourceBroker {
@@ -487,8 +488,9 @@ impl FrameSourceBroker {
         true
     }
 
-    fn poll_consumed(&mut self) {
-        let Some(socket) = self.socket.as_ref() else { return; };
+    fn poll_consumed(&mut self) -> Vec<u64> {
+        let mut completed = Vec::new();
+        let Some(socket) = self.socket.as_ref() else { return completed; };
         loop {
             let mut bytes = [0u8; std::mem::size_of::<AhbMessage>()];
             let received = {
@@ -504,47 +506,48 @@ impl FrameSourceBroker {
                         packet.message_type == AHB_FRAME_CONSUMED &&
                         packet.generation == 1 && packet.fd_count == 0 &&
                         (packet.slot as usize) < self.in_flight.len() &&
-                        self.in_flight[packet.slot as usize] == Some(packet.frame_id);
+                        self.in_flight[packet.slot as usize]
+                            .map(|entry| entry.0) == Some(packet.frame_id);
                     if !valid {
                         log::error!("invalid FRAME_CONSUMED frame={} slot={}", packet.frame_id, packet.slot);
                         self.socket = None;
                         self.in_flight = [None; 3];
-                        return;
+                        return completed;
                     }
-                    self.in_flight[packet.slot as usize] = None;
-                    log::debug!("FRAME_CONSUMED frame={} slot={}", packet.frame_id, packet.slot);
+                    let (_, compositor_frame) = self.in_flight[packet.slot as usize].take().unwrap();
+                    completed.push(compositor_frame);
+                    log::debug!("FRAME_CONSUMED frame={} slot={} compositor_frame={}", packet.frame_id, packet.slot, compositor_frame);
                 }
                 Ok(0) => {
                     log::info!("FRAME_SOURCE worker disconnected after draining releases");
                     self.socket = None;
                     self.in_flight = [None; 3];
-                    return;
+                    return completed;
                 }
                 Ok(received) => {
                     log::error!("short FRAME_CONSUMED packet: {} bytes", received);
                     self.socket = None;
                     self.in_flight = [None; 3];
-                    return;
+                    return completed;
                 }
-                Err(nix::errno::Errno::EAGAIN) => return,
+                Err(nix::errno::Errno::EAGAIN) => return completed,
                 Err(error) => {
                     log::warn!("FRAME_CONSUMED receive failed: {}", error);
                     self.socket = None;
                     self.in_flight = [None; 3];
-                    return;
+                    return completed;
                 }
             }
         }
     }
 
-    fn send(&mut self, slot: usize, item: &RenderItem) -> BrokerSendResult {
+    fn send(&mut self, slot: usize, compositor_frame: u64, item: &RenderItem) -> BrokerSendResult {
         let RenderItem::DmaBuf { fd, fourcc, modifier, offset, stride, width, height,
                                  is_cursor, .. } = item else { return BrokerSendResult::Unsupported; };
         if *modifier != 0 || *offset != 0 || *width <= 0 || *height <= 0 || *is_cursor {
             return BrokerSendResult::Unsupported;
         }
         if !self.ensure_connected() { return BrokerSendResult::Unavailable; }
-        self.poll_consumed();
         let frame_id = self.next_frame_id;
         let wire_slot = ((frame_id - 1) % 3) as u32;
         if self.in_flight[wire_slot as usize].is_some() {
@@ -566,7 +569,7 @@ impl FrameSourceBroker {
         match sendmsg::<()>(socket.as_raw_fd(), &iov, &controls, MsgFlags::empty(), None) {
             Ok(written) if written == bytes.len() => {
                 self.next_frame_id += 1;
-                self.in_flight[wire_slot as usize] = Some(frame_id);
+                self.in_flight[wire_slot as usize] = Some((frame_id, compositor_frame));
                 log::info!("FRAME_SOURCE sent compositor DMA-BUF as frame={} wire_slot={} compositor_slot={} {}x{} fourcc=0x{:x} stride={}",
                            frame_id, wire_slot, slot, width, height, fourcc, stride);
                 BrokerSendResult::Sent(frame_id)
@@ -652,10 +655,11 @@ pub struct AndroidSmithayState {
     pub gl_cursor_dmabuf_program: Option<u32>,
     presentation_slots: PresentationSlotTracker,
     source_broker: FrameSourceBroker,
+    presentation_sender: crossbeam_channel::Sender<u64>,
 }
 
 impl AndroidSmithayState {
-    pub fn new() -> Self {
+    pub fn new(presentation_sender: crossbeam_channel::Sender<u64>) -> Self {
         Self {
             native_window: None,
             egl_display: None,
@@ -685,6 +689,7 @@ impl AndroidSmithayState {
             gl_cursor_dmabuf_program: None,
             presentation_slots: PresentationSlotTracker::new(),
             source_broker: FrameSourceBroker::new(),
+            presentation_sender,
         }
     }
 }
@@ -738,6 +743,10 @@ pub(crate) fn flush_deferred_composite(
     state: &mut AndroidSmithayState,
     rx: &crossbeam_channel::Receiver<RenderFrame>,
 ) {
+    for compositor_frame in state.source_broker.poll_consumed() {
+        let _ = state.presentation_sender.send(compositor_frame);
+    }
+
     // Keep only the newest complete compositor frame. Merging queued Vecs
     // duplicates surfaces and destroys frame/damage boundaries.
     let mut latest: Option<RenderFrame> = None;
@@ -751,7 +760,7 @@ pub(crate) fn flush_deferred_composite(
         };
         log::debug!("presenting deferred compositor frame {} in slot {} ({} items)", frame.id, slot, frame.items.len());
         let broker_result = if frame.items.len() == 1 {
-            state.source_broker.send(slot, &frame.items[0])
+            state.source_broker.send(slot, frame.id, &frame.items[0])
         } else {
             BrokerSendResult::Unsupported
         };
@@ -769,6 +778,7 @@ pub(crate) fn flush_deferred_composite(
             }
             BrokerSendResult::Unsupported | BrokerSendResult::Unavailable => {
                 composite_multi(state, &frame.items);
+                let _ = state.presentation_sender.send(frame.id);
             }
         }
         if !state.presentation_slots.release(slot, frame.id) {

@@ -178,6 +178,7 @@ impl WaylandServer {
     pub(crate) fn bind(
         socket_dir: &Path,
         render_sender: crossbeam_channel::Sender<crate::android::backend::smithay_backend::RenderFrame>,
+        presentation_receiver: crossbeam_channel::Receiver<u64>,
     ) -> Result<Self, String> {
         std::env::set_var("XDG_RUNTIME_DIR", socket_dir);
         std::env::set_var("WAYLAND_DISPLAY", "wayland-0");
@@ -195,7 +196,9 @@ impl WaylandServer {
             (1080, 1920)
         };
 
-        let runtime = AndroidSeatRuntime::new(&display.handle(), final_w, final_h, render_sender)
+        let runtime = AndroidSeatRuntime::new(
+            &display.handle(), final_w, final_h, render_sender, presentation_receiver,
+        )
             .map_err(|error| format!("failed to initialize Smithay runtime: {error}"))?;
 
         let socket_path = socket_dir.join("wayland-0");

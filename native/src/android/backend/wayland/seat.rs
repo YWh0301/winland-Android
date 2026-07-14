@@ -269,6 +269,7 @@ pub struct AndroidSeatRuntime {
         HashMap<WlSurface, smithay::utils::Rectangle<i32, smithay::utils::Logical>>,
     pub(crate) render_sender:
         crossbeam_channel::Sender<crate::android::backend::smithay_backend::RenderFrame>,
+    pub(crate) presentation_receiver: crossbeam_channel::Receiver<u64>,
     pub(crate) clipboard_text: Arc<Mutex<String>>,
     pub(crate) last_activation_serial: Option<Serial>,
     pub(crate) trackpad_anchor: Option<(f32, f32)>,
@@ -302,6 +303,7 @@ impl AndroidSeatRuntime {
         width: i32,
         height: i32,
         render_sender: crossbeam_channel::Sender<crate::android::backend::smithay_backend::RenderFrame>,
+        presentation_receiver: crossbeam_channel::Receiver<u64>,
     ) -> Result<Self, String> {
         log::info!("SmithayRuntime: init stage=compositor_state");
         let compositor_state =
@@ -663,6 +665,7 @@ impl AndroidSeatRuntime {
             virtual_keyboard_state,
             data_control_state,
             render_sender,
+            presentation_receiver,
             clipboard_text: Arc::new(Mutex::new(String::new())),
             last_activation_serial: None,
             trackpad_anchor: None,
@@ -1121,20 +1124,25 @@ impl AndroidSeatRuntime {
         })
     }
 
-    /// Render and complete pending frame callbacks on the compositor frame clock.
+    /// Render on the output clock, but complete pending frame callbacks only
+    /// after the corresponding direct presentation or AHB release acknowledgement.
     pub(crate) fn frame_tick(&mut self) {
-        self.render_all();
-        for elem in self.space.elements() {
-            if let Some(wl_surface) = elem.0.wl_surface() {
-                Self::send_frame_callback(wl_surface.as_ref());
-                for (popup, _) in PopupManager::popups_for_surface(wl_surface.as_ref()) {
-                    Self::send_frame_callback(popup.wl_surface());
+        let completed: Vec<u64> = self.presentation_receiver.try_iter().collect();
+        if !completed.is_empty() {
+            log::debug!("presentation completed compositor frames {:?}; releasing frame callbacks", completed);
+            for elem in self.space.elements() {
+                if let Some(wl_surface) = elem.0.wl_surface() {
+                    Self::send_frame_callback(wl_surface.as_ref());
+                    for (popup, _) in PopupManager::popups_for_surface(wl_surface.as_ref()) {
+                        Self::send_frame_callback(popup.wl_surface());
+                    }
                 }
             }
+            for surface in &self.unmanaged_surfaces {
+                Self::send_frame_callback(surface);
+            }
         }
-        for surface in &self.unmanaged_surfaces {
-            Self::send_frame_callback(surface);
-        }
+        self.render_all();
     }
 
     pub(crate) fn render_all(&mut self) {

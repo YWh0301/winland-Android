@@ -63,11 +63,13 @@ pub fn spawn(distro_id: &str) -> Result<(), String> {
     let thread_socket_dir = socket_dir.clone();
     let (startup_tx, startup_rx) = mpsc::channel::<Result<(), String>>();
     let (render_tx, render_rx) = crossbeam_channel::unbounded::<RenderFrame>();
+    let (presentation_tx, presentation_rx) = crossbeam_channel::unbounded::<u64>();
 
     let worker = thread::spawn(move || {
         let mut wayland_server = match crate::android::backend::wayland::smithay_runtime::WaylandServer::bind(
             &thread_socket_dir,
             render_tx,
+            presentation_rx,
         ) {
             Ok(server) => {
                 if !is_wayland_socket_published(&thread_socket_dir, server.socket_name()) {
@@ -101,7 +103,7 @@ pub fn spawn(distro_id: &str) -> Result<(), String> {
             }
         };
 
-        let mut backend_state = AndroidSmithayState::new();
+        let mut backend_state = AndroidSmithayState::new(presentation_tx);
         let mut input_router = InputRouter::default();
         let mut last_frame_tick = std::time::Instant::now();
         log::info!("Compositor: runtime loop started");
