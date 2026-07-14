@@ -219,10 +219,10 @@ class DisplayActivity : ComponentActivity() {
     private var ahbPresenter: Boolean = false
     private var ahbGeneration: Int = 1
     private var ahbNextGeneration: Int = 0
-    private var ahbWidth: Int = 256
-    private var ahbHeight: Int = 256
-    private var ahbNextWidth: Int = 256
-    private var ahbNextHeight: Int = 256
+    private var ahbWidth: Int = 1696
+    private var ahbHeight: Int = 1200
+    private var ahbNextWidth: Int = 1696
+    private var ahbNextHeight: Int = 1200
 
     private fun copyAssetTree(assetPath: String, destination: File) {
         val children = assets.list(assetPath) ?: emptyArray()
@@ -274,8 +274,8 @@ class DisplayActivity : ComponentActivity() {
         ahbPresenter = intent.getBooleanExtra("ahb_presenter", false)
         ahbGeneration = intent.getIntExtra("ahb_generation", 1).coerceAtLeast(1)
         ahbNextGeneration = intent.getIntExtra("ahb_next_generation", 0).coerceAtLeast(0)
-        ahbWidth = intent.getIntExtra("ahb_width", 256).coerceAtLeast(1)
-        ahbHeight = intent.getIntExtra("ahb_height", 256).coerceAtLeast(1)
+        ahbWidth = intent.getIntExtra("ahb_width", 1696).coerceAtLeast(1)
+        ahbHeight = intent.getIntExtra("ahb_height", 1200).coerceAtLeast(1)
         ahbNextWidth = intent.getIntExtra("ahb_next_width", ahbWidth).coerceAtLeast(1)
         ahbNextHeight = intent.getIntExtra("ahb_next_height", ahbHeight).coerceAtLeast(1)
         distroId = intent.getStringExtra("distro_id") ?: "ubuntu"
