@@ -430,6 +430,7 @@ impl ShmRegion {
 
 const AHB_PROTOCOL_MAGIC: u32 = 0x5041_4842;
 const AHB_PROTOCOL_VERSION: u16 = 1;
+const AHB_POOL_READY: u16 = 2;
 const AHB_FRAME_SOURCE: u16 = 8;
 const AHB_FRAME_CONSUMED: u16 = 9;
 const AHB_SOURCE_LINEAR: u32 = 1;
@@ -467,10 +468,14 @@ struct FrameSourceBroker {
     next_frame_id: u64,
     /// wire frame ID and originating compositor RenderFrame ID per AHB slot.
     in_flight: [Option<(u64, u64)>; 3],
+    generation: u32,
+    ready: bool,
 }
 
 impl FrameSourceBroker {
-    fn new() -> Self { Self { socket: None, next_frame_id: 1, in_flight: [None; 3] } }
+    fn new() -> Self {
+        Self { socket: None, next_frame_id: 1, in_flight: [None; 3], generation: 0, ready: false }
+    }
 
     fn ensure_connected(&mut self) -> bool {
         if self.socket.is_some() { return true; }
@@ -483,9 +488,16 @@ impl FrameSourceBroker {
             log::debug!("FRAME_SOURCE broker unavailable: {}", error);
             return false;
         }
-        log::info!("FRAME_SOURCE broker connected");
+        log::info!("FRAME_SOURCE broker connected; awaiting POOL_READY");
         self.socket = Some(socket);
+        self.ready = false;
         true
+    }
+
+    fn disconnect(&mut self) {
+        self.socket = None;
+        self.in_flight = [None; 3];
+        self.ready = false;
     }
 
     fn poll_consumed(&mut self) -> Vec<u64> {
@@ -501,17 +513,24 @@ impl FrameSourceBroker {
             match received {
                 Ok(received) if received == bytes.len() => {
                     let packet = unsafe { std::ptr::read_unaligned(bytes.as_ptr().cast::<AhbMessage>()) };
+                    if packet.magic == AHB_PROTOCOL_MAGIC && packet.version == AHB_PROTOCOL_VERSION &&
+                       packet.message_type == AHB_POOL_READY && packet.fd_count == 0 && packet.generation > 0 {
+                        self.generation = packet.generation;
+                        self.next_frame_id = 1;
+                        self.in_flight = [None; 3];
+                        self.ready = true;
+                        log::info!("FRAME_SOURCE POOL_READY generation={}", self.generation);
+                        continue;
+                    }
                     let valid = packet.magic == AHB_PROTOCOL_MAGIC &&
                         packet.version == AHB_PROTOCOL_VERSION &&
                         packet.message_type == AHB_FRAME_CONSUMED &&
-                        packet.generation == 1 && packet.fd_count == 0 &&
+                        packet.generation == self.generation && packet.fd_count == 0 &&
                         (packet.slot as usize) < self.in_flight.len() &&
-                        self.in_flight[packet.slot as usize]
-                            .map(|entry| entry.0) == Some(packet.frame_id);
+                        self.in_flight[packet.slot as usize].map(|entry| entry.0) == Some(packet.frame_id);
                     if !valid {
                         log::error!("invalid FRAME_CONSUMED frame={} slot={}", packet.frame_id, packet.slot);
-                        self.socket = None;
-                        self.in_flight = [None; 3];
+                        self.disconnect();
                         return completed;
                     }
                     let (_, compositor_frame) = self.in_flight[packet.slot as usize].take().unwrap();
@@ -520,21 +539,18 @@ impl FrameSourceBroker {
                 }
                 Ok(0) => {
                     log::info!("FRAME_SOURCE worker disconnected after draining releases");
-                    self.socket = None;
-                    self.in_flight = [None; 3];
+                    self.disconnect();
                     return completed;
                 }
                 Ok(received) => {
-                    log::error!("short FRAME_CONSUMED packet: {} bytes", received);
-                    self.socket = None;
-                    self.in_flight = [None; 3];
+                    log::error!("short AHB control packet: {} bytes", received);
+                    self.disconnect();
                     return completed;
                 }
                 Err(nix::errno::Errno::EAGAIN) => return completed,
                 Err(error) => {
-                    log::warn!("FRAME_CONSUMED receive failed: {}", error);
-                    self.socket = None;
-                    self.in_flight = [None; 3];
+                    log::warn!("AHB control receive failed: {}", error);
+                    self.disconnect();
                     return completed;
                 }
             }
@@ -548,6 +564,8 @@ impl FrameSourceBroker {
             return BrokerSendResult::Unsupported;
         }
         if !self.ensure_connected() { return BrokerSendResult::Unavailable; }
+        let _ = self.poll_consumed();
+        if !self.ready { return BrokerSendResult::Backpressured; }
         let frame_id = self.next_frame_id;
         let wire_slot = ((frame_id - 1) % 3) as u32;
         if self.in_flight[wire_slot as usize].is_some() {
@@ -555,7 +573,7 @@ impl FrameSourceBroker {
         }
         let packet = AhbMessage {
             magic: AHB_PROTOCOL_MAGIC, version: AHB_PROTOCOL_VERSION,
-            message_type: AHB_FRAME_SOURCE, slot: wire_slot, generation: 1,
+            message_type: AHB_FRAME_SOURCE, slot: wire_slot, generation: self.generation,
             frame_id, width: *width as u32, height: *height as u32,
             format: *fourcc, stride: *stride, fd_count: 1, flags: AHB_SOURCE_LINEAR,
         };
@@ -576,8 +594,7 @@ impl FrameSourceBroker {
             }
             result => {
                 log::warn!("FRAME_SOURCE send failed: {:?}", result);
-                self.socket = None;
-                self.in_flight = [None; 3];
+                self.disconnect();
                 BrokerSendResult::Unavailable
             }
         }
