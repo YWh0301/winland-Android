@@ -124,6 +124,8 @@ class MainActivity : ComponentActivity() {
                         putExtra("bridge_only", true)
                         putExtra("ahb_presenter", intent.getBooleanExtra("ahb_presenter", false))
                         putExtra("ahb_generation", intent.getIntExtra("ahb_generation", 1))
+                        putExtra("ahb_width", intent.getIntExtra("ahb_width", 256))
+                        putExtra("ahb_height", intent.getIntExtra("ahb_height", 256))
                         putExtra("distro_id", "bridge")
                     })
                     finish()
