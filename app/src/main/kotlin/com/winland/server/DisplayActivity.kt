@@ -221,6 +221,8 @@ class DisplayActivity : ComponentActivity() {
     private var ahbNextGeneration: Int = 0
     private var ahbWidth: Int = 256
     private var ahbHeight: Int = 256
+    private var ahbNextWidth: Int = 256
+    private var ahbNextHeight: Int = 256
 
     private fun copyAssetTree(assetPath: String, destination: File) {
         val children = assets.list(assetPath) ?: emptyArray()
@@ -259,8 +261,8 @@ class DisplayActivity : ComponentActivity() {
             val result = AhbPresenterBridge.run(surface, ahbGeneration, ahbWidth, ahbHeight)
             Log.i("DisplayActivity", "AHB bridge presenter exited result=$result generation=$ahbGeneration size=${ahbWidth}x$ahbHeight")
             if (result == 0 && ahbNextGeneration > ahbGeneration && surface.isValid) {
-                val nextResult = AhbPresenterBridge.run(surface, ahbNextGeneration, ahbWidth, ahbHeight)
-                Log.i("DisplayActivity", "AHB bridge presenter exited result=$nextResult generation=$ahbNextGeneration size=${ahbWidth}x$ahbHeight")
+                val nextResult = AhbPresenterBridge.run(surface, ahbNextGeneration, ahbNextWidth, ahbNextHeight)
+                Log.i("DisplayActivity", "AHB bridge presenter exited result=$nextResult generation=$ahbNextGeneration size=${ahbNextWidth}x$ahbNextHeight")
             }
         }
     }
@@ -272,6 +274,8 @@ class DisplayActivity : ComponentActivity() {
         ahbNextGeneration = intent.getIntExtra("ahb_next_generation", 0).coerceAtLeast(0)
         ahbWidth = intent.getIntExtra("ahb_width", 256).coerceAtLeast(1)
         ahbHeight = intent.getIntExtra("ahb_height", 256).coerceAtLeast(1)
+        ahbNextWidth = intent.getIntExtra("ahb_next_width", ahbWidth).coerceAtLeast(1)
+        ahbNextHeight = intent.getIntExtra("ahb_next_height", ahbHeight).coerceAtLeast(1)
         distroId = intent.getStringExtra("distro_id") ?: "ubuntu"
         Log.i("WinlandDiag", "onCreate: Entry. Distro: $distroId. Native libraries loaded: ${NativeBridge.isLoaded()}")
         super.onCreate(savedInstanceState)
