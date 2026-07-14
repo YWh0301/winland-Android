@@ -514,6 +514,12 @@ impl FrameSourceBroker {
                     self.in_flight[packet.slot as usize] = None;
                     log::debug!("FRAME_CONSUMED frame={} slot={}", packet.frame_id, packet.slot);
                 }
+                Ok(0) => {
+                    log::info!("FRAME_SOURCE worker disconnected after draining releases");
+                    self.socket = None;
+                    self.in_flight = [None; 3];
+                    return;
+                }
                 Ok(received) => {
                     log::error!("short FRAME_CONSUMED packet: {} bytes", received);
                     self.socket = None;
