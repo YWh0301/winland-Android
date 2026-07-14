@@ -218,6 +218,7 @@ class DisplayActivity : ComponentActivity() {
     private var bridgeOnly: Boolean = false
     private var ahbPresenter: Boolean = false
     private var ahbGeneration: Int = 1
+    private var ahbNextGeneration: Int = 0
     private var ahbWidth: Int = 256
     private var ahbHeight: Int = 256
 
@@ -257,6 +258,10 @@ class DisplayActivity : ComponentActivity() {
             NativeBridge.resumeRendering()
             val result = AhbPresenterBridge.run(surface, ahbGeneration, ahbWidth, ahbHeight)
             Log.i("DisplayActivity", "AHB bridge presenter exited result=$result generation=$ahbGeneration size=${ahbWidth}x$ahbHeight")
+            if (result == 0 && ahbNextGeneration > ahbGeneration && surface.isValid) {
+                val nextResult = AhbPresenterBridge.run(surface, ahbNextGeneration, ahbWidth, ahbHeight)
+                Log.i("DisplayActivity", "AHB bridge presenter exited result=$nextResult generation=$ahbNextGeneration size=${ahbWidth}x$ahbHeight")
+            }
         }
     }
 
@@ -264,6 +269,7 @@ class DisplayActivity : ComponentActivity() {
         bridgeOnly = intent.getBooleanExtra("bridge_only", false)
         ahbPresenter = intent.getBooleanExtra("ahb_presenter", false)
         ahbGeneration = intent.getIntExtra("ahb_generation", 1).coerceAtLeast(1)
+        ahbNextGeneration = intent.getIntExtra("ahb_next_generation", 0).coerceAtLeast(0)
         ahbWidth = intent.getIntExtra("ahb_width", 256).coerceAtLeast(1)
         ahbHeight = intent.getIntExtra("ahb_height", 256).coerceAtLeast(1)
         distroId = intent.getStringExtra("distro_id") ?: "ubuntu"

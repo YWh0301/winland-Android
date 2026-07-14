@@ -77,6 +77,7 @@ class MainActivity : ComponentActivity() {
             putExtra("bridge_only", true)
             putExtra("ahb_presenter", source.getBooleanExtra("ahb_presenter", false))
             putExtra("ahb_generation", source.getIntExtra("ahb_generation", 1))
+            putExtra("ahb_next_generation", source.getIntExtra("ahb_next_generation", 0))
             putExtra("ahb_width", source.getIntExtra("ahb_width", 256))
             putExtra("ahb_height", source.getIntExtra("ahb_height", 256))
             putExtra("distro_id", "bridge")
