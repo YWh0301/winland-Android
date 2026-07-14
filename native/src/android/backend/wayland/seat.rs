@@ -1325,6 +1325,7 @@ impl AndroidSeatRuntime {
                     }) as f32;
 
                     if let Some(buffer) = buffer_info {
+                        tracked_buffers.push((popup_surface.clone(), buffer.clone()));
                         if buffer
                             .data::<smithay::wayland::shm::ShmBufferUserData>()
                             .is_none()
@@ -1384,6 +1385,7 @@ impl AndroidSeatRuntime {
             }) as f32;
 
             if let Some(buffer) = buffer_info {
+                tracked_buffers.push((s.clone(), buffer.clone()));
                 let is_shm = buffer
                     .data::<smithay::wayland::shm::ShmBufferUserData>()
                     .is_some();
@@ -1511,6 +1513,7 @@ impl AndroidSeatRuntime {
 
                         let buffer_info = Self::get_surface_buffer(wl_surface);
                         if let Some(buffer) = buffer_info {
+                            tracked_buffers.push((wl_surface.clone(), buffer.clone()));
                             if buffer
                                 .data::<smithay::wayland::shm::ShmBufferUserData>()
                                 .is_none()
