@@ -529,7 +529,7 @@ impl FrameSourceBroker {
                         (packet.slot as usize) < self.in_flight.len() &&
                         self.in_flight[packet.slot as usize].map(|entry| entry.0) == Some(packet.frame_id);
                     if !valid {
-                        log::error!("invalid FRAME_CONSUMED frame={} slot={}", packet.frame_id, packet.slot);
+                        log::error!("invalid FRAME_CONSUMED frame={} slot={} generation={} expected_generation={}", packet.frame_id, packet.slot, packet.generation, self.generation);
                         self.disconnect();
                         return completed;
                     }
