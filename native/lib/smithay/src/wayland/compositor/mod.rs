@@ -197,6 +197,11 @@ pub struct SurfaceAttributes {
     /// the surface, and be left to `None` if the user does not attach anything.
     pub buffer: Option<BufferAssignment>,
 
+    /// Buffers replaced by a newer commit but not yet safe to release.
+    /// Android AHB backends drain this after the frame that sampled each
+    /// buffer has completed presentation ownership.
+    pub retired_buffers: Vec<wl_buffer::WlBuffer>,
+
     /// Location of the new buffer relative to the previous one
     ///
     /// The x and y arguments specify the location of the new pending buffer's upper left corner,
@@ -255,6 +260,7 @@ impl Default for SurfaceAttributes {
     fn default() -> SurfaceAttributes {
         SurfaceAttributes {
             buffer: None,
+            retired_buffers: Vec::new(),
             buffer_delta: None,
             buffer_scale: 1,
             buffer_transform: wl_output::Transform::Normal,

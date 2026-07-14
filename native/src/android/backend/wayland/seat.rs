@@ -270,6 +270,9 @@ pub struct AndroidSeatRuntime {
     pub(crate) render_sender:
         crossbeam_channel::Sender<crate::android::backend::smithay_backend::RenderFrame>,
     pub(crate) presentation_receiver: crossbeam_channel::Receiver<u64>,
+    pub(crate) buffer_last_frame: HashMap<WlBuffer, u64>,
+    pub(crate) pending_buffer_releases: Vec<(WlBuffer, u64)>,
+    pub(crate) latest_completed_frame: u64,
     pub(crate) clipboard_text: Arc<Mutex<String>>,
     pub(crate) last_activation_serial: Option<Serial>,
     pub(crate) trackpad_anchor: Option<(f32, f32)>,
@@ -666,6 +669,9 @@ impl AndroidSeatRuntime {
             data_control_state,
             render_sender,
             presentation_receiver,
+            buffer_last_frame: HashMap::new(),
+            pending_buffer_releases: Vec::new(),
+            latest_completed_frame: 0,
             clipboard_text: Arc::new(Mutex::new(String::new())),
             last_activation_serial: None,
             trackpad_anchor: None,
@@ -1124,10 +1130,46 @@ impl AndroidSeatRuntime {
         })
     }
 
+    fn track_surface_buffer_for_frame(&mut self, surface: &WlSurface, buffer: &WlBuffer, frame: u64) {
+        let retired = smithay::wayland::compositor::with_states(surface, |states| {
+            let mut attrs = states.cached_state.get::<smithay::wayland::compositor::SurfaceAttributes>();
+            std::mem::take(&mut attrs.current().retired_buffers)
+        });
+        for old in retired {
+            let last_frame = self.buffer_last_frame.remove(&old).unwrap_or(frame.saturating_sub(1));
+            if last_frame <= self.latest_completed_frame {
+                log::debug!("releasing retired wl_buffer immediately after compositor frame {}", last_frame);
+                old.release();
+            } else {
+                self.pending_buffer_releases.push((old, last_frame));
+            }
+        }
+        self.buffer_last_frame.insert(buffer.clone(), frame);
+    }
+
+    fn release_completed_buffers(&mut self) {
+        let completed = self.latest_completed_frame;
+        let mut waiting = Vec::new();
+        for (buffer, frame) in self.pending_buffer_releases.drain(..) {
+            if frame <= completed {
+                log::debug!("releasing deferred wl_buffer after compositor frame {}", frame);
+                buffer.release();
+            } else {
+                waiting.push((buffer, frame));
+            }
+        }
+        self.pending_buffer_releases = waiting;
+        self.buffer_last_frame.retain(|buffer, _| buffer.is_alive());
+    }
+
     /// Render on the output clock, but complete pending frame callbacks only
     /// after the corresponding direct presentation or AHB release acknowledgement.
     pub(crate) fn frame_tick(&mut self) {
         let completed: Vec<u64> = self.presentation_receiver.try_iter().collect();
+        if let Some(latest) = completed.iter().copied().max() {
+            self.latest_completed_frame = self.latest_completed_frame.max(latest);
+            self.release_completed_buffers();
+        }
         if !completed.is_empty() {
             log::debug!("presentation completed compositor frames {:?}; releasing frame callbacks", completed);
             for elem in self.space.elements() {
@@ -1154,6 +1196,7 @@ impl AndroidSeatRuntime {
         use smithay::wayland::shm::with_buffer_contents;
 
         let mut render_list: Vec<crate::android::backend::smithay_backend::RenderItem> = Vec::new();
+        let mut tracked_buffers: Vec<(WlSurface, WlBuffer)> = Vec::new();
         let elem_count = self.space.elements().count();
         let unmanaged_count = self.unmanaged_surfaces.len();
 
@@ -1190,6 +1233,7 @@ impl AndroidSeatRuntime {
                 }) as f32;
 
                 if let Some(buffer) = buffer_info {
+                    tracked_buffers.push((wl_surface.clone(), buffer.clone()));
                     let is_shm = buffer
                         .data::<smithay::wayland::shm::ShmBufferUserData>()
                         .is_some();
@@ -1518,6 +1562,10 @@ impl AndroidSeatRuntime {
                     }
                 }
             }
+        }
+
+        for (surface, buffer) in tracked_buffers {
+            self.track_surface_buffer_for_frame(&surface, &buffer, frame);
         }
 
         if !render_list.is_empty() {

@@ -112,6 +112,7 @@ impl Cacheable for SurfaceAttributes {
     fn commit(&mut self, _dh: &DisplayHandle) -> Self {
         SurfaceAttributes {
             buffer: self.buffer.take(),
+            retired_buffers: Vec::new(),
             buffer_delta: self.buffer_delta.take(),
             buffer_scale: self.buffer_scale,
             buffer_transform: self.buffer_transform,
@@ -133,7 +134,7 @@ impl Cacheable for SurfaceAttributes {
                 });
 
                 if Some(&buffer) != new_buffer {
-                    buffer.release();
+                    into.retired_buffers.push(buffer);
                 }
             }
         }
