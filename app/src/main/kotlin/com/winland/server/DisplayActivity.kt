@@ -119,6 +119,7 @@ class DisplayActivity : ComponentActivity() {
         private var activeSurfaceView: WaylandInputSurfaceView? = null
         @Volatile
         private var currentActivityRef: WeakReference<Activity>? = null
+        private val bridgeRuntimeInitialized = AtomicBoolean(false)
 
         /**
          * Called from JNI (NativeBridge.onKeyboardInitFailed) to إظهار رسالة فشل تهيئة الكيبورد.
@@ -192,7 +193,6 @@ class DisplayActivity : ComponentActivity() {
     private val pollHandler = android.os.Handler(android.os.Looper.getMainLooper())
     private val didRequestGuestStart = AtomicBoolean(false)
     private val didStartAhbPresenter = AtomicBoolean(false)
-    private var isNativeBridgeInitialized = false
     private val primaryClipChangedListener = ClipboardManager.OnPrimaryClipChangedListener {
         if (suppressNextClipboardSync) {
             suppressNextClipboardSync = false
@@ -247,6 +247,17 @@ class DisplayActivity : ComponentActivity() {
         copyAssetTree("xkb", xkbDir)
         check(File(xkbDir, "rules/evdev").isFile) { "Bundled XKB rules are incomplete" }
         marker.writeText("xkeyboard-config\n")
+    }
+
+    private fun startAhbPresenterIfNeeded(surface: android.view.Surface) {
+        if (!bridgeOnly || !ahbPresenter || !didStartAhbPresenter.compareAndSet(false, true)) return
+        lifecycleScope.launch(Dispatchers.IO) {
+            NativeBridge.suspendRendering()
+            delay(200)
+            NativeBridge.resumeRendering()
+            val result = AhbPresenterBridge.run(surface, ahbGeneration, ahbWidth, ahbHeight)
+            Log.i("DisplayActivity", "AHB bridge presenter exited result=$result generation=$ahbGeneration size=${ahbWidth}x$ahbHeight")
+        }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -504,17 +515,18 @@ class DisplayActivity : ComponentActivity() {
                             }
 
 
-                            if (isNativeBridgeInitialized) {
-                                Log.i("WinlandDiag", "NativeBridge already initialized, rebinding surface...")
+                            if (bridgeRuntimeInitialized.get()) {
+                                Log.i("WinlandDiag", "NativeBridge process runtime already initialized, rebinding surface...")
                                 NativeBridge.rebindSurface(holder.surface)
                                 NativeBridge.resumeRendering()
+                                startAhbPresenterIfNeeded(holder.surface)
                                 return@setupLifecycle
                             }
 
                             val nativeInitOk = withContext(Dispatchers.IO) {
                                 NativeBridge.initWaylandConnection(holder.surface, this@DisplayActivity, distroId)
                             }
-                            isNativeBridgeInitialized = nativeInitOk
+                            if (nativeInitOk) bridgeRuntimeInitialized.set(true)
                             Log.i("WinlandDiag", "NativeBridge.initWaylandConnection: result=$nativeInitOk")
 
                             if (nativeInitOk) {
@@ -532,18 +544,7 @@ class DisplayActivity : ComponentActivity() {
                                 NativeBridge.setScrollSensitivity(prefs.getFloat("scroll_sensitivity", 1.0f))
                                 val inputPrefs = context.getSharedPreferences("winland_prefs", Context.MODE_PRIVATE)
                                 NativeBridge.setInputMode(inputPrefs.getInt("input_mode_mask", 1))
-                                if (bridgeOnly && ahbPresenter && didStartAhbPresenter.compareAndSet(false, true)) {
-                                    lifecycleScope.launch(Dispatchers.IO) {
-                                        // Keep the Smithay protocol/frame loop alive but release its
-                                        // direct EGL/ANativeWindow target before the AHB presenter
-                                        // takes ownership of the same Surface.
-                                        NativeBridge.suspendRendering()
-                                        delay(200)
-                                        NativeBridge.resumeRendering()
-                                        val result = AhbPresenterBridge.run(holder.surface, ahbGeneration, ahbWidth, ahbHeight)
-                                        Log.i("DisplayActivity", "AHB bridge presenter exited result=$result")
-                                    }
-                                }
+                                startAhbPresenterIfNeeded(holder.surface)
                                 if (!bridgeOnly && didRequestGuestStart.compareAndSet(false, true)) {
                                     lifecycleScope.launch(Dispatchers.IO) {
                                         Log.i("WinlandDiag", "Guest Start: Waiting for Wayland socket probe...")
