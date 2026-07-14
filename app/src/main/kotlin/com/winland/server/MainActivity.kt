@@ -72,6 +72,27 @@ class MainActivity : ComponentActivity() {
         )
     }
 
+    private fun launchBridgeDisplay(source: Intent) {
+        startActivity(Intent(this, DisplayActivity::class.java).apply {
+            putExtra("bridge_only", true)
+            putExtra("ahb_presenter", source.getBooleanExtra("ahb_presenter", false))
+            putExtra("ahb_generation", source.getIntExtra("ahb_generation", 1))
+            putExtra("ahb_width", source.getIntExtra("ahb_width", 256))
+            putExtra("ahb_height", source.getIntExtra("ahb_height", 256))
+            putExtra("distro_id", "bridge")
+        })
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        if (!intent.getBooleanExtra("bridge_only", false)) return
+        lifecycleScope.launch {
+            if (NativeBridge.awaitLibrariesLoaded(30_000L)) launchBridgeDisplay(intent)
+            else Log.e(TAG, "Bridge-only relaunch aborted: native libraries failed to load")
+        }
+    }
+
     private fun showToastSafe(message: String, longDuration: Boolean = false) {
         if (isFinishing || isDestroyed) return
         if (!lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.STARTED)) return
@@ -120,14 +141,7 @@ class MainActivity : ComponentActivity() {
                         finish()
                         return@launch
                     }
-                    startActivity(Intent(this@MainActivity, DisplayActivity::class.java).apply {
-                        putExtra("bridge_only", true)
-                        putExtra("ahb_presenter", intent.getBooleanExtra("ahb_presenter", false))
-                        putExtra("ahb_generation", intent.getIntExtra("ahb_generation", 1))
-                        putExtra("ahb_width", intent.getIntExtra("ahb_width", 256))
-                        putExtra("ahb_height", intent.getIntExtra("ahb_height", 256))
-                        putExtra("distro_id", "bridge")
-                    })
+                    launchBridgeDisplay(intent)
                     finish()
                 }
                 return@traceLifecycle
