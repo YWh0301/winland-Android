@@ -1,5 +1,5 @@
-use nix::sys::socket::{connect, sendmsg, AddressFamily, ControlMessage, MsgFlags, SockFlag, SockType, UnixAddr};
-use std::io::IoSlice;
+use nix::sys::socket::{connect, recvmsg, sendmsg, AddressFamily, ControlMessage, MsgFlags, SockFlag, SockType, UnixAddr};
+use std::io::{IoSlice, IoSliceMut};
 use std::os::fd::{AsRawFd, OwnedFd};
 
 fn cpu_read_dmabuf(fd: i32, offset: usize, stride: usize, width: usize, height: usize) -> Option<Vec<u8>> {
@@ -431,11 +431,12 @@ impl ShmRegion {
 const AHB_PROTOCOL_MAGIC: u32 = 0x5041_4842;
 const AHB_PROTOCOL_VERSION: u16 = 1;
 const AHB_FRAME_SOURCE: u16 = 8;
+const AHB_FRAME_CONSUMED: u16 = 9;
 const AHB_SOURCE_LINEAR: u32 = 1;
 
 #[repr(C)]
 #[derive(Clone, Copy)]
-struct AhbFrameSourceMessage {
+struct AhbMessage {
     magic: u32,
     version: u16,
     message_type: u16,
@@ -450,21 +451,31 @@ struct AhbFrameSourceMessage {
     flags: u32,
 }
 
-const _: () = assert!(std::mem::size_of::<AhbFrameSourceMessage>() == 48);
+const _: () = assert!(std::mem::size_of::<AhbMessage>() == 48);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BrokerSendResult {
+    Unsupported,
+    Unavailable,
+    Backpressured,
+    Sent(u64),
+}
 
 #[derive(Debug)]
 struct FrameSourceBroker {
     socket: Option<OwnedFd>,
     next_frame_id: u64,
+    in_flight: [Option<u64>; 3],
 }
 
 impl FrameSourceBroker {
-    fn new() -> Self { Self { socket: None, next_frame_id: 1 } }
+    fn new() -> Self { Self { socket: None, next_frame_id: 1, in_flight: [None; 3] } }
 
     fn ensure_connected(&mut self) -> bool {
         if self.socket.is_some() { return true; }
         let Ok(socket) = nix::sys::socket::socket(
-            AddressFamily::Unix, SockType::SeqPacket, SockFlag::SOCK_CLOEXEC, None,
+            AddressFamily::Unix, SockType::SeqPacket,
+            SockFlag::SOCK_CLOEXEC | SockFlag::SOCK_NONBLOCK, None,
         ) else { return false; };
         let Ok(address) = UnixAddr::new_abstract(b"padputer-frame-source") else { return false; };
         if let Err(error) = connect(socket.as_raw_fd(), &address) {
@@ -476,21 +487,71 @@ impl FrameSourceBroker {
         true
     }
 
-    fn send(&mut self, slot: usize, item: &RenderItem) -> Option<u64> {
+    fn poll_consumed(&mut self) {
+        let Some(socket) = self.socket.as_ref() else { return; };
+        loop {
+            let mut bytes = [0u8; std::mem::size_of::<AhbMessage>()];
+            let received = {
+                let mut iov = [IoSliceMut::new(&mut bytes)];
+                recvmsg::<()>(socket.as_raw_fd(), &mut iov, None, MsgFlags::MSG_DONTWAIT)
+                    .map(|message| message.bytes)
+            };
+            match received {
+                Ok(received) if received == bytes.len() => {
+                    let packet = unsafe { std::ptr::read_unaligned(bytes.as_ptr().cast::<AhbMessage>()) };
+                    let valid = packet.magic == AHB_PROTOCOL_MAGIC &&
+                        packet.version == AHB_PROTOCOL_VERSION &&
+                        packet.message_type == AHB_FRAME_CONSUMED &&
+                        packet.generation == 1 && packet.fd_count == 0 &&
+                        (packet.slot as usize) < self.in_flight.len() &&
+                        self.in_flight[packet.slot as usize] == Some(packet.frame_id);
+                    if !valid {
+                        log::error!("invalid FRAME_CONSUMED frame={} slot={}", packet.frame_id, packet.slot);
+                        self.socket = None;
+                        self.in_flight = [None; 3];
+                        return;
+                    }
+                    self.in_flight[packet.slot as usize] = None;
+                    log::debug!("FRAME_CONSUMED frame={} slot={}", packet.frame_id, packet.slot);
+                }
+                Ok(received) => {
+                    log::error!("short FRAME_CONSUMED packet: {} bytes", received);
+                    self.socket = None;
+                    self.in_flight = [None; 3];
+                    return;
+                }
+                Err(nix::errno::Errno::EAGAIN) => return,
+                Err(error) => {
+                    log::warn!("FRAME_CONSUMED receive failed: {}", error);
+                    self.socket = None;
+                    self.in_flight = [None; 3];
+                    return;
+                }
+            }
+        }
+    }
+
+    fn send(&mut self, slot: usize, item: &RenderItem) -> BrokerSendResult {
         let RenderItem::DmaBuf { fd, fourcc, modifier, offset, stride, width, height,
-                                 is_cursor, .. } = item else { return None; };
-        if *modifier != 0 || *offset != 0 || *width <= 0 || *height <= 0 ||
-           *is_cursor || !self.ensure_connected() { return None; }
+                                 is_cursor, .. } = item else { return BrokerSendResult::Unsupported; };
+        if *modifier != 0 || *offset != 0 || *width <= 0 || *height <= 0 || *is_cursor {
+            return BrokerSendResult::Unsupported;
+        }
+        if !self.ensure_connected() { return BrokerSendResult::Unavailable; }
+        self.poll_consumed();
         let frame_id = self.next_frame_id;
         let wire_slot = ((frame_id - 1) % 3) as u32;
-        let packet = AhbFrameSourceMessage {
+        if self.in_flight[wire_slot as usize].is_some() {
+            return BrokerSendResult::Backpressured;
+        }
+        let packet = AhbMessage {
             magic: AHB_PROTOCOL_MAGIC, version: AHB_PROTOCOL_VERSION,
             message_type: AHB_FRAME_SOURCE, slot: wire_slot, generation: 1,
             frame_id, width: *width as u32, height: *height as u32,
             format: *fourcc, stride: *stride, fd_count: 1, flags: AHB_SOURCE_LINEAR,
         };
         let bytes = unsafe {
-            std::slice::from_raw_parts((&packet as *const AhbFrameSourceMessage).cast::<u8>(), std::mem::size_of_val(&packet))
+            std::slice::from_raw_parts((&packet as *const AhbMessage).cast::<u8>(), std::mem::size_of_val(&packet))
         };
         let iov = [IoSlice::new(bytes)];
         let fds = [fd.as_raw_fd()];
@@ -499,14 +560,16 @@ impl FrameSourceBroker {
         match sendmsg::<()>(socket.as_raw_fd(), &iov, &controls, MsgFlags::empty(), None) {
             Ok(written) if written == bytes.len() => {
                 self.next_frame_id += 1;
+                self.in_flight[wire_slot as usize] = Some(frame_id);
                 log::info!("FRAME_SOURCE sent compositor DMA-BUF as frame={} wire_slot={} compositor_slot={} {}x{} fourcc=0x{:x} stride={}",
                            frame_id, wire_slot, slot, width, height, fourcc, stride);
-                Some(frame_id)
+                BrokerSendResult::Sent(frame_id)
             }
             result => {
                 log::warn!("FRAME_SOURCE send failed: {:?}", result);
                 self.socket = None;
-                None
+                self.in_flight = [None; 3];
+                BrokerSendResult::Unavailable
             }
         }
     }
@@ -681,16 +744,26 @@ pub(crate) fn flush_deferred_composite(
             return;
         };
         log::debug!("presenting deferred compositor frame {} in slot {} ({} items)", frame.id, slot, frame.items.len());
-        let brokered = frame.items.len() == 1 &&
-            state.source_broker.send(slot, &frame.items[0]).is_some();
-        if brokered {
-            // The app-domain Turnip worker owns composition into the Android
-            // AHB slot. Never also mmap/upload this DMA-BUF through the legacy
-            // direct presenter: that would reintroduce the CPU pixel path and
-            // race two presentation backends for the same frame.
-            log::debug!("deferred compositor frame {} handed to AHB worker", frame.id);
+        let broker_result = if frame.items.len() == 1 {
+            state.source_broker.send(slot, &frame.items[0])
         } else {
-            composite_multi(state, &frame.items);
+            BrokerSendResult::Unsupported
+        };
+        match broker_result {
+            BrokerSendResult::Sent(worker_frame) => {
+                // The app-domain Turnip worker owns composition into the Android
+                // AHB slot. Never also mmap/upload this DMA-BUF through the legacy
+                // direct presenter.
+                log::debug!("compositor frame {} handed to AHB worker frame {}", frame.id, worker_frame);
+            }
+            BrokerSendResult::Backpressured => {
+                // Preserve latest-frame scheduling without queueing an unbounded
+                // number of duplicated DMA-BUF fds behind the three AHB slots.
+                log::debug!("dropping compositor frame {}: AHB slots await FRAME_CONSUMED", frame.id);
+            }
+            BrokerSendResult::Unsupported | BrokerSendResult::Unavailable => {
+                composite_multi(state, &frame.items);
+            }
         }
         if !state.presentation_slots.release(slot, frame.id) {
             log::error!("presentation slot/frame mismatch: slot={} frame={}", slot, frame.id);
