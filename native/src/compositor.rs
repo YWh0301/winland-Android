@@ -264,7 +264,16 @@ pub fn spawn(distro_id: &str) -> Result<(), String> {
                     JniCommand::SetResolution { width, height } => {
                         backend_state.surface_size = (width, height);
                         backend_state.requested_resolution = Some((width, height));
+                        let scale = crate::android::command_channel::get_scale();
+                        backend_state.current_scale = scale;
+                        let logical_w = (width as f32 / scale).round() as i32;
+                        let logical_h = (height as f32 / scale).round() as i32;
                         crate::android::command_channel::set_surface_size(width, height);
+                        crate::android::command_channel::set_logical_size(logical_w.max(1), logical_h.max(1));
+                        if let Some(server) = wayland_server.as_mut() {
+                            server.runtime.update_output_mode(width, height, None);
+                        }
+                        log::info!("Compositor: output mode updated to {}x{} scale={}", width, height, scale);
                     }
                     JniCommand::SetScale { scale } => {
                         backend_state.requested_scale = Some(scale);

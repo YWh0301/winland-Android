@@ -261,6 +261,8 @@ class DisplayActivity : ComponentActivity() {
             val result = AhbPresenterBridge.run(surface, ahbGeneration, ahbWidth, ahbHeight)
             Log.i("DisplayActivity", "AHB bridge presenter exited result=$result generation=$ahbGeneration size=${ahbWidth}x$ahbHeight")
             if (result == 0 && ahbNextGeneration > ahbGeneration && surface.isValid) {
+                NativeBridge.setResolutionSafe(ahbNextWidth, ahbNextHeight)
+                delay(100)
                 val nextResult = AhbPresenterBridge.run(surface, ahbNextGeneration, ahbNextWidth, ahbNextHeight)
                 Log.i("DisplayActivity", "AHB bridge presenter exited result=$nextResult generation=$ahbNextGeneration size=${ahbNextWidth}x$ahbNextHeight")
             }
