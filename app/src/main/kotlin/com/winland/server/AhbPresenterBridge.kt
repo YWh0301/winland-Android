@@ -6,7 +6,7 @@ import android.view.Surface
 object AhbPresenterBridge {
     init { System.loadLibrary("ahb_present_test") }
 
-    @JvmStatic private external fun nativeRun(surface: Surface): Int
+    @JvmStatic private external fun nativeRun(surface: Surface, generation: Int): Int
 
-    fun run(surface: Surface): Int = nativeRun(surface)
+    fun run(surface: Surface, generation: Int = 1): Int = nativeRun(surface, generation)
 }

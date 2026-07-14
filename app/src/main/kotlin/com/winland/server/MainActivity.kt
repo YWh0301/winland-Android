@@ -123,6 +123,7 @@ class MainActivity : ComponentActivity() {
                     startActivity(Intent(this@MainActivity, DisplayActivity::class.java).apply {
                         putExtra("bridge_only", true)
                         putExtra("ahb_presenter", intent.getBooleanExtra("ahb_presenter", false))
+                        putExtra("ahb_generation", intent.getIntExtra("ahb_generation", 1))
                         putExtra("distro_id", "bridge")
                     })
                     finish()

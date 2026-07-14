@@ -217,6 +217,7 @@ class DisplayActivity : ComponentActivity() {
     private var distroId: String = "ubuntu"
     private var bridgeOnly: Boolean = false
     private var ahbPresenter: Boolean = false
+    private var ahbGeneration: Int = 1
 
     private fun copyAssetTree(assetPath: String, destination: File) {
         val children = assets.list(assetPath) ?: emptyArray()
@@ -249,6 +250,7 @@ class DisplayActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         bridgeOnly = intent.getBooleanExtra("bridge_only", false)
         ahbPresenter = intent.getBooleanExtra("ahb_presenter", false)
+        ahbGeneration = intent.getIntExtra("ahb_generation", 1).coerceAtLeast(1)
         distroId = intent.getStringExtra("distro_id") ?: "ubuntu"
         Log.i("WinlandDiag", "onCreate: Entry. Distro: $distroId. Native libraries loaded: ${NativeBridge.isLoaded()}")
         super.onCreate(savedInstanceState)
@@ -534,7 +536,7 @@ class DisplayActivity : ComponentActivity() {
                                         NativeBridge.suspendRendering()
                                         delay(200)
                                         NativeBridge.resumeRendering()
-                                        val result = AhbPresenterBridge.run(holder.surface)
+                                        val result = AhbPresenterBridge.run(holder.surface, ahbGeneration)
                                         Log.i("DisplayActivity", "AHB bridge presenter exited result=$result")
                                     }
                                 }
