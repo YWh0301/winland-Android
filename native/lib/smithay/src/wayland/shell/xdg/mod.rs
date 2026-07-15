@@ -128,7 +128,7 @@ use crate::wayland::shell::xdg::dialog::ToplevelDialogHint;
 use std::cmp::min;
 use std::{collections::HashSet, fmt::Debug, sync::Mutex};
 
-use tracing::{error, trace, trace_span, warn};
+use tracing::{error, trace, trace_span};
 use wayland_protocols::xdg::decoration::zv1::server::zxdg_toplevel_decoration_v1;
 use wayland_protocols::xdg::shell::server::xdg_positioner::{Anchor, ConstraintAdjustment, Gravity};
 use wayland_protocols::xdg::shell::server::xdg_surface;
@@ -1607,21 +1607,6 @@ impl ToplevelSurface {
             let got_unmapped = had_buffer_before && !has_buffer;
 
             if has_buffer {
-                // Aquamarine 0.12 can queue its first nested-output buffer in the
-                // small interval after the server sent the initial configure but
-                // before its event loop dispatches xdg_surface.configure. Preserve
-                // the configure in the pending list so the later real ACK remains
-                // valid. The compatibility path is explicit and default-off; the
-                // patched Aquamarine staging must pass with normal strict checking.
-                if role.last_acked.is_none()
-                    && role.app_id.as_deref() == Some("aquamarine")
-                    && std::env::var("PADPUTER_AQUAMARINE_CONFIGURE_COMPAT").as_deref() == Ok("1")
-                {
-                    role.last_acked = role.pending_configures.last().cloned();
-                    if role.last_acked.is_some() {
-                        warn!("accepting Aquamarine nested output buffer before initial configure dispatch");
-                    }
-                }
                 let Some(last_acked) = role.last_acked.clone() else {
                     return Some((
                         xdg_surface::Error::UnconfiguredBuffer,
