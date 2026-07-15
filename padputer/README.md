@@ -43,6 +43,7 @@ ignored and supplied by the parent `components/ahb-presenter/build.sh`.
 - complete `RenderFrame` boundaries and three-slot `FrameSourceBroker`;
 - presentation-gated frame callbacks and retired buffer release;
 - AHB generation, hot resize and fail-closed worker disconnect behavior;
-- default-off `PADPUTER_AQUAMARINE_CONFIGURE_COMPAT=1` diagnostic workaround.
+- strict xdg-shell initial-configure validation with no app-id exception.
 
-Do not enable that compatibility switch in the strict patched-Aquamarine gate.
+The former default-off Aquamarine compatibility branch was removed after the
+patched client passed the strict 300-frame hardware gate.
