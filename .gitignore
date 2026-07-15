@@ -2,6 +2,7 @@
 build/
 app/build/
 native/target/
+padputer/.build/
 app/.cxx/
 *.so
 !app/src/main/jniLibs/**/*.so
