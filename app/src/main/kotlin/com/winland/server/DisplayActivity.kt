@@ -255,6 +255,11 @@ class DisplayActivity : ComponentActivity() {
     private fun startAhbPresenterIfNeeded(surface: android.view.Surface) {
         if (!bridgeOnly || !ahbPresenter || !didStartAhbPresenter.compareAndSet(false, true)) return
         lifecycleScope.launch(Dispatchers.IO) {
+            // Publish the Android-owned AHB pool size as the Linux output mode
+            // before a nested compositor creates its outer toplevel. Otherwise
+            // the initial Android Surface size (3392x2400) wins the configure
+            // race and forces an unnecessary GPU downscale into the 1696x1200 pool.
+            NativeBridge.setResolutionSafe(ahbWidth, ahbHeight)
             NativeBridge.suspendRendering()
             delay(200)
             NativeBridge.resumeRendering()
