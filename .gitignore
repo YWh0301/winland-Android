@@ -5,6 +5,7 @@ native/target/
 app/.cxx/
 *.so
 !app/src/main/jniLibs/**/*.so
+app/src/main/jniLibs/arm64-v8a/libahb_present_test.so
 *.aar
 local.properties
 .idea/
