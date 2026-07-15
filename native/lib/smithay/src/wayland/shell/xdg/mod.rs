@@ -1611,9 +1611,12 @@ impl ToplevelSurface {
                 // small interval after the server sent the initial configure but
                 // before its event loop dispatches xdg_surface.configure. Preserve
                 // the configure in the pending list so the later real ACK remains
-                // valid, but allow this one well-identified client to commit using
-                // the state already sent by the compositor.
-                if role.last_acked.is_none() && role.app_id.as_deref() == Some("aquamarine") {
+                // valid. The compatibility path is explicit and default-off; the
+                // patched Aquamarine staging must pass with normal strict checking.
+                if role.last_acked.is_none()
+                    && role.app_id.as_deref() == Some("aquamarine")
+                    && std::env::var("PADPUTER_AQUAMARINE_CONFIGURE_COMPAT").as_deref() == Ok("1")
+                {
                     role.last_acked = role.pending_configures.last().cloned();
                     if role.last_acked.is_some() {
                         warn!("accepting Aquamarine nested output buffer before initial configure dispatch");
