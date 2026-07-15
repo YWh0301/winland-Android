@@ -3,18 +3,31 @@ plugins {
     id("org.jetbrains.kotlin.android")
 }
 
+// The native compositor requires xkeyboard-config before it can publish a
+// Wayland socket. Bridge-only builds package the host's architecture-neutral
+// XKB data and copy it into the app-private bridge root at first launch.
+val xkbSourceDir = providers.environmentVariable("XKB_CONFIG_ROOT")
+    .orElse("/usr/share/X11/xkb")
+val generatedXkbAssets = layout.buildDirectory.dir("generated/xkbAssets")
+val stageXkbAssets by tasks.registering(Sync::class) {
+    val source = file(xkbSourceDir.get())
+    require(source.resolve("rules/evdev").isFile) {
+        "xkeyboard-config not found at $source (install Arch package xkeyboard-config or set XKB_CONFIG_ROOT)"
+    }
+    from(source)
+    into(generatedXkbAssets.map { it.dir("xkb") })
+}
 
 android {
     namespace = "com.winland.server"
     compileSdk = 34
-    ndkVersion = "26.1.10909125"
 
     defaultConfig {
-        applicationId = "com.winland.server"
+        applicationId = "io.padputer.waylandbridge"
         minSdk = 26
         targetSdk = 34
         versionCode = 1
-        versionName = "1.0"
+        versionName = "0.1-bridge-only"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
@@ -63,6 +76,7 @@ android {
         getByName("main") {
             java.srcDirs("src/main/kotlin")
             jniLibs.srcDirs("src/main/jniLibs")
+            assets.srcDir(generatedXkbAssets)
         }
     }
     packaging {
@@ -74,6 +88,10 @@ android {
             keepDebugSymbols += "**/*.so"
         }
     }
+}
+
+tasks.named("preBuild").configure {
+    dependsOn(stageXkbAssets)
 }
 
 dependencies {

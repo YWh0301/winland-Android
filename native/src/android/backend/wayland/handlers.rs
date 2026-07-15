@@ -9,7 +9,6 @@ use smithay::backend::renderer::utils::on_commit_buffer_handler;
 #[cfg(feature = "smithay_android")]
 use smithay::desktop::space::SpaceElement;
 #[cfg(feature = "smithay_android")]
-use smithay::desktop::utils::send_frames_surface_tree;
 #[cfg(feature = "smithay_android")]
 use smithay::desktop::{PopupKind, Window};
 #[cfg(feature = "smithay_android")]
@@ -248,6 +247,9 @@ impl CompositorHandler for AndroidSeatRuntime {
     }
 
     fn commit(&mut self, surface: &WlSurface) {
+        // Smithay requires buffer state to be consumed before any desktop
+        // bookkeeping reads RendererSurfaceStateUserData.
+        on_commit_buffer_handler::<Self>(surface);
         self.prune_dead_surfaces();
 
         self.popups.commit(surface);
@@ -367,19 +369,11 @@ impl CompositorHandler for AndroidSeatRuntime {
             );
         }
 
-        on_commit_buffer_handler::<Self>(surface);
-
-        send_frames_surface_tree(
-            surface,
-            &self.output,
-            std::time::Duration::ZERO,
-            None,
-            |_, _| Some(self.output.clone()),
-        );
-
         self.render_all();
 
-        self.sync_text_input_to_android();
+        // Frame callbacks are deliberately not completed synchronously here.
+        // They must be paced by Android presentation/vsync; commit-time callbacks
+        // create an unbounded commit/callback feedback loop.
     }
 }
 
