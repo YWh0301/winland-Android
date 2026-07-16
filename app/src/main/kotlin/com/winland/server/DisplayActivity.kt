@@ -224,38 +224,41 @@ class DisplayActivity : ComponentActivity() {
     private var ahbNextWidth: Int = 1696
     private var ahbNextHeight: Int = 1200
     private var outerCursorProbe: Boolean = false
-    private var outerCursorX: Float = 0f
-    private var outerCursorY: Float = 0f
     private var outerCursorSerial: Long = 0
+    private val outerCursorPoller = object : Runnable {
+        override fun run() {
+            if (!outerCursorProbe) return
+            val state = runCatching { NativeBridge.pollOuterCursorState() }.getOrNull()
+            if (state != null && state.size >= 4 && state[0] > outerCursorSerial) {
+                val result = AhbPresenterBridge.moveOuterCursor(
+                    ahbGeneration, state[0], state[1].toInt() - 2,
+                    state[2].toInt() - 2, state[3] != 0L
+                )
+                if (result == 0) outerCursorSerial = state[0]
+            }
+            pollHandler.postDelayed(this, 8L)
+        }
+    }
 
     private fun createOuterCursorIfNeeded(surface: android.view.Surface) {
         Log.i("PadputerOuterCursor", "create requested bridgeOnly=$bridgeOnly presenter=$ahbPresenter enabled=$outerCursorProbe valid=${surface.isValid}")
         if (!bridgeOnly || !ahbPresenter || !outerCursorProbe) return
-        outerCursorX = ahbWidth.toFloat()
-        outerCursorY = ahbHeight.toFloat()
         outerCursorSerial = 0
-        val result = AhbPresenterBridge.createOuterCursor(
-            surface, ahbGeneration, outerCursorX.toInt() - 2, outerCursorY.toInt() - 2
-        )
-        Log.i("PadputerOuterCursor", "create generation=$ahbGeneration result=$result position=$outerCursorX,$outerCursorY")
-    }
-
-    private fun moveOuterCursorBy(dx: Float, dy: Float) {
-        if (!outerCursorProbe) return
-        val physicalWidth = ahbWidth * 2f
-        val physicalHeight = ahbHeight * 2f
-        outerCursorX = (outerCursorX + dx).coerceIn(0f, physicalWidth)
-        outerCursorY = (outerCursorY + dy).coerceIn(0f, physicalHeight)
-        outerCursorSerial += 1
-        val result = AhbPresenterBridge.moveOuterCursor(
-            ahbGeneration, outerCursorSerial,
-            outerCursorX.toInt() - 2, outerCursorY.toInt() - 2, true
-        )
-        if (result != 0) Log.w("PadputerOuterCursor", "move rejected generation=$ahbGeneration serial=$outerCursorSerial")
+        val outerScale = resources.displayMetrics.widthPixels.toFloat() / ahbWidth.toFloat()
+        NativeBridge.setOuterCursorScale(outerScale)
+        val initialX = (ahbWidth * outerScale / 2f).toInt() - 2
+        val initialY = (ahbHeight * outerScale / 2f).toInt() - 2
+        val result = AhbPresenterBridge.createOuterCursor(surface, ahbGeneration, initialX, initialY)
+        Log.i("PadputerOuterCursor", "create generation=$ahbGeneration result=$result position=$initialX,$initialY scale=$outerScale")
+        if (result == 0) {
+            pollHandler.removeCallbacks(outerCursorPoller)
+            pollHandler.post(outerCursorPoller)
+        }
     }
 
     private fun destroyOuterCursorIfNeeded() {
         if (!outerCursorProbe) return
+        pollHandler.removeCallbacks(outerCursorPoller)
         val result = AhbPresenterBridge.destroyOuterCursor(ahbGeneration)
         Log.i("PadputerOuterCursor", "destroy generation=$ahbGeneration result=$result")
     }
@@ -290,8 +293,12 @@ class DisplayActivity : ComponentActivity() {
 
     private fun startAhbPresenterIfNeeded(surface: android.view.Surface) {
         Log.i("PadputerOuterCursor", "presenter start requested bridgeOnly=$bridgeOnly presenter=$ahbPresenter started=${didStartAhbPresenter.get()}")
-        if (!bridgeOnly || !ahbPresenter || !didStartAhbPresenter.compareAndSet(false, true)) return
+        if (!bridgeOnly || !ahbPresenter) return
+        // Surface recreation does not restart the long-lived presenter thread,
+        // but it invalidates the old SurfaceControl parent. Recreate the cursor
+        // layer on every valid bind before applying the one-shot presenter guard.
         createOuterCursorIfNeeded(surface)
+        if (!didStartAhbPresenter.compareAndSet(false, true)) return
         lifecycleScope.launch(Dispatchers.IO) {
             // Publish the Android-owned AHB pool size as the Linux output mode
             // before a nested compositor creates its outer toplevel. Otherwise
@@ -1246,7 +1253,6 @@ class DisplayActivity : ComponentActivity() {
                             if (pid == primaryPointerId) {
                                 val x = event.getX(i)
                                 val y = event.getY(i)
-                                (context as? DisplayActivity)?.moveOuterCursorBy(x - lastDragX, y - lastDragY)
                                 lastDragX = x
                                 lastDragY = y
                                 if (NativeBridge.isLoaded()) {
@@ -1265,7 +1271,6 @@ class DisplayActivity : ComponentActivity() {
                                 val dy = event.getY(i) - lastDragY
                                 lastDragX = event.getX(i)
                                 lastDragY = event.getY(i)
-                                (context as? DisplayActivity)?.moveOuterCursorBy(dx, dy)
                                 if (NativeBridge.isLoaded()) {
                                     val now = (SystemClock.uptimeMillis() and 0x7FFFFFFF).toInt()
                                     NativeBridge.sendRelativeMotion(dx, dy, now)

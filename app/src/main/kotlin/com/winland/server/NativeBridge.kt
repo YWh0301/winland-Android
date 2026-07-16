@@ -146,6 +146,8 @@ object NativeBridge {
     external fun pollWaylandClipboard(): String?
     external fun getWaylandClipboardGen(): Long
     external fun pollImeVisible(): Boolean
+    external fun setOuterCursorScale(value: Float)
+    external fun pollOuterCursorState(): LongArray?
 
     fun setResolutionSafe(width: Int, height: Int) {
         if (width <= 0 || height <= 0) {

@@ -416,6 +416,11 @@ impl AndroidSeatRuntime {
                 time: engine_timing::now_ms_u32(),
             },
         );
+        crate::android::bridge_clipboard::publish_outer_cursor_position(
+            new_location.x,
+            new_location.y,
+            true,
+        );
 
         // Also send relative_motion for relative pointer protocol clients
         let cfocus = self
@@ -960,6 +965,11 @@ impl AndroidSeatRuntime {
                 serial: SERIAL_COUNTER.next_serial(),
                 time,
             },
+        );
+        crate::android::bridge_clipboard::publish_outer_cursor_position(
+            new_location.x,
+            new_location.y,
+            true,
         );
 
         let cfocus = self
