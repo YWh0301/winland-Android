@@ -25,6 +25,13 @@ pub fn publish_outer_cursor_position(logical_x: f64, logical_y: f64, visible: bo
     state.3 = visible;
 }
 
+pub fn publish_outer_cursor_visibility(visible: bool) {
+    let mut state = outer_cursor().lock().unwrap();
+    if state.3 == visible { return; }
+    state.0 = state.0.wrapping_add(1).max(1);
+    state.3 = visible;
+}
+
 pub fn set_ime_visible(show: bool) {
     IME_VISIBLE.store(show, Ordering::Relaxed);
 }

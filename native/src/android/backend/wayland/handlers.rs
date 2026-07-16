@@ -114,6 +114,9 @@ impl SeatHandler for AndroidSeatRuntime {
                 }
             }
         };
+        crate::android::bridge_clipboard::publish_outer_cursor_visibility(
+            self.cursor_status.is_some(),
+        );
     }
 
     fn focus_changed(&mut self, seat: &Seat<Self>, focused: Option<&WlSurface>) {
@@ -123,6 +126,7 @@ impl SeatHandler for AndroidSeatRuntime {
         if focused.is_none() {
             self.cursor_status = None;
             self.last_cursor_mode = "fallback:named:Default".to_string();
+            crate::android::bridge_clipboard::publish_outer_cursor_visibility(false);
         }
     }
 }
