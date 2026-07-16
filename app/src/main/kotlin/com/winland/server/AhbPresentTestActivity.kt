@@ -31,11 +31,18 @@ class AhbPresentTestActivity : Activity(), SurfaceHolder.Callback {
     }
 
     override fun surfaceCreated(holder: SurfaceHolder) {
-        status.text = "Waiting for Turnip producer on padputer-ahb-present"
+        val cursorProbe = intent.getBooleanExtra("surface_control_cursor_probe", false)
+        status.text = if (cursorProbe) "Probing app-owned SurfaceControl cursor layer" else "Waiting for Turnip producer on padputer-ahb-present"
         thread(name = "ahb-present-test") {
-            val result = AhbPresenterBridge.run(holder.surface)
-            Log.i("AhbPresentTest", "nativeRun result=$result")
-            runOnUiThread { status.text = if (result == 0) "AHB zero-copy EGL presentation succeeded" else "Native test failed: $result" }
+            val result = if (cursorProbe) AhbPresenterBridge.runSurfaceControlCursorProbe(holder.surface) else AhbPresenterBridge.run(holder.surface)
+            Log.i("AhbPresentTest", "nativeRun cursorProbe=$cursorProbe result=$result")
+            runOnUiThread {
+                status.text = when {
+                    result != 0 -> "Native test failed: $result"
+                    cursorProbe -> "SurfaceControl cursor layer succeeded"
+                    else -> "AHB zero-copy EGL presentation succeeded"
+                }
+            }
         }
     }
     override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) = Unit
