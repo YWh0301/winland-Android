@@ -323,6 +323,20 @@ impl AndroidSeatRuntime {
         let raw_dx = point.x - last_x;
         let raw_dy = point.y - last_y;
         self.trackpad_anchor = Some((point.x, point.y));
+        let (phys_w, phys_h) = self.screen_size;
+        if raw_dx.abs() > phys_w as f32 * 0.125 || raw_dy.abs() > phys_h as f32 * 0.125 {
+            log::warn!(
+                "Trackpad: rejecting unbounded move anchor=({:.1},{:.1}) point=({:.1},{:.1}) raw=({:.1},{:.1}) screen={}x{}",
+                last_x,
+                last_y,
+                point.x,
+                point.y,
+                raw_dx,
+                raw_dy,
+                phys_w,
+                phys_h
+            );
+        }
 
         if raw_dx.abs() < 0.5 && raw_dy.abs() < 0.5 {
             return;
@@ -367,11 +381,16 @@ impl AndroidSeatRuntime {
 
         // Clamp to logical output bounds (physical / scale).
         let scale = self.output_scale();
-        let (phys_w, phys_h) = self.screen_size;
         let logical_w = phys_w as f64 / scale;
         let logical_h = phys_h as f64 / scale;
-        let dx_logical = dx / scale as f32;
-        let dy_logical = dy / scale as f32;
+        // Android can occasionally report one coordinate in a different
+        // transform space at gesture transition. Bound one event to 12.5% of
+        // the output so a single discontinuity cannot pin the cursor to an
+        // edge; ordinary motion still accumulates without a global limit.
+        let dx_logical = (dx / scale as f32)
+            .clamp(-(logical_w as f32) * 0.125, (logical_w as f32) * 0.125);
+        let dy_logical = (dy / scale as f32)
+            .clamp(-(logical_h as f32) * 0.125, (logical_h as f32) * 0.125);
         let current = p.current_location();
         let new_location = Point::<f64, Logical>::from((
             (current.x + dx_logical as f64).clamp(0.0, logical_w),
@@ -905,9 +924,21 @@ impl AndroidSeatRuntime {
         let logical_w = phys_w as f64 / scale;
         let logical_h = phys_h as f64 / scale;
         let current = p.current_location();
+        let dx_logical = (dx as f64 / scale).clamp(-logical_w * 0.125, logical_w * 0.125);
+        let dy_logical = (dy as f64 / scale).clamp(-logical_h * 0.125, logical_h * 0.125);
+        if dx.abs() > phys_w as f32 * 0.25 || dy.abs() > phys_h as f32 * 0.25 {
+            log::warn!(
+                "Trackpad: bounded direct relative delta=({:.1},{:.1}) screen={}x{} scale={:.2}",
+                dx,
+                dy,
+                phys_w,
+                phys_h,
+                scale
+            );
+        }
         let new_location = Point::<f64, Logical>::from((
-            (current.x + dx as f64 / scale).clamp(0.0, logical_w),
-            (current.y + dy as f64 / scale).clamp(0.0, logical_h),
+            (current.x + dx_logical).clamp(0.0, logical_w),
+            (current.y + dy_logical).clamp(0.0, logical_h),
         ));
 
         let pointer_focus = self.focused_surface.as_ref().map(|s| {
@@ -938,8 +969,8 @@ impl AndroidSeatRuntime {
             self,
             cfocus,
             &RelativeMotionEvent {
-                delta: (dx as f64 / scale, dy as f64 / scale).into(),
-                delta_unaccel: (dx as f64 / scale, dy as f64 / scale).into(),
+                delta: (dx_logical, dy_logical).into(),
+                delta_unaccel: (dx_logical, dy_logical).into(),
                 utime: (time as u64) * 1000,
             },
         );

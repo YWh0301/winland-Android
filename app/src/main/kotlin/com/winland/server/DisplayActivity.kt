@@ -560,7 +560,13 @@ class DisplayActivity : ComponentActivity() {
                                 val prefs = context.getSharedPreferences("winland_settings", Context.MODE_PRIVATE)
                                 NativeBridge.setScrollSensitivity(prefs.getFloat("scroll_sensitivity", 1.0f))
                                 val inputPrefs = context.getSharedPreferences("winland_prefs", Context.MODE_PRIVATE)
-                                NativeBridge.setInputMode(inputPrefs.getInt("input_mode_mask", 1))
+                                val inputMode = if (bridgeOnly) {
+                                    intent.getIntExtra("input_mode_mask", 2)
+                                } else {
+                                    inputPrefs.getInt("input_mode_mask", 1)
+                                }
+                                NativeBridge.setInputMode(inputMode)
+                                Log.i("PadputerInput", "configured_input_mode=$inputMode bridgeOnly=$bridgeOnly")
                                 startAhbPresenterIfNeeded(holder.surface)
                                 if (!bridgeOnly && didRequestGuestStart.compareAndSet(false, true)) {
                                     lifecycleScope.launch(Dispatchers.IO) {
@@ -1062,6 +1068,14 @@ class DisplayActivity : ComponentActivity() {
             }
 
             val actionMasked = event.actionMasked
+            if (actionMasked == android.view.MotionEvent.ACTION_DOWN ||
+                actionMasked == android.view.MotionEvent.ACTION_POINTER_DOWN
+            ) {
+                Log.i(
+                    "PadputerInput",
+                    "touch_action=$actionMasked count=${event.pointerCount} actionIndex=${event.actionIndex}"
+                )
+            }
 
             // A two-finger gesture is resolved here rather than in the Rust
             // single-pointer trackpad state machine: a stationary pair becomes
@@ -1265,7 +1279,12 @@ class DisplayActivity : ComponentActivity() {
                                     NativeBridge.sendTouchEvent(actionMasked, pointerId, x, y)
                                 } else {
                                     val prefs = context.getSharedPreferences("winland_prefs", Context.MODE_PRIVATE)
-                                    val trackpadMode = prefs.getInt("input_mode_mask", 1) == 2
+                                    val activity = context as? DisplayActivity
+                                    val trackpadMode = if (activity?.bridgeOnly == true) {
+                                        activity.intent.getIntExtra("input_mode_mask", 2) == 2
+                                    } else {
+                                        prefs.getInt("input_mode_mask", 1) == 2
+                                    }
                                     if (trackpadMode) {
                                         // Stationary long-press + lift in Trackpad → LEFT click
                                         NativeBridge.sendTouchEvent(
