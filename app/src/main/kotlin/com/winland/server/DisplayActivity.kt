@@ -1083,6 +1083,7 @@ class DisplayActivity : ComponentActivity() {
                 twoFingerLastX = cx
                 twoFingerLastY = cy
                 gestureState = GestureState.TWO_FINGER_PENDING
+                Log.i("PadputerInput", "two_finger_down centroid=($cx,$cy) count=${event.pointerCount}")
                 suppressNextPrimaryUp = false
                 if (NativeBridge.isLoaded()) {
                     // Clear the first-finger tap/drag state. TouchCancel also
@@ -1137,6 +1138,7 @@ class DisplayActivity : ComponentActivity() {
                                 LONG_PRESS_MOVE_THRESHOLD_PX * LONG_PRESS_MOVE_THRESHOLD_PX
                         ) {
                             gestureState = GestureState.TWO_FINGER_SCROLL
+                            Log.i("PadputerInput", "two_finger_scroll_start delta=($totalDx,$totalDy)")
                         }
                         if (gestureState == GestureState.TWO_FINGER_SCROLL && NativeBridge.isLoaded()) {
                             val now = (SystemClock.uptimeMillis() and 0x7FFFFFFF).toInt()
@@ -1213,6 +1215,7 @@ class DisplayActivity : ComponentActivity() {
                     if (gestureState == GestureState.TWO_FINGER_PENDING ||
                         gestureState == GestureState.TWO_FINGER_SCROLL
                     ) {
+                        Log.i("PadputerInput", "two_finger_up state=$gestureState")
                         if (NativeBridge.isLoaded()) {
                             val now = (SystemClock.uptimeMillis() and 0x7FFFFFFF).toInt()
                             if (gestureState == GestureState.TWO_FINGER_PENDING) {
