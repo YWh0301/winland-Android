@@ -181,6 +181,11 @@ pub fn spawn(distro_id: &str) -> Result<(), String> {
                             server.runtime.inject_trackpad_click(state, button, time);
                         }
                     }
+                    JniCommand::TrackpadScroll { dx, dy, time, finished } => {
+                        if let Some(server) = wayland_server.as_mut() {
+                            server.runtime.inject_trackpad_scroll(dx, dy, time, finished);
+                        }
+                    }
                     JniCommand::SetRelativeSensitivity { value } => {
                         if let Some(server) = wayland_server.as_mut() {
                             server.runtime.relative_sensitivity = value;

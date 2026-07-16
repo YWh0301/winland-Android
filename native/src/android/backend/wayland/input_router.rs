@@ -260,6 +260,41 @@ impl AndroidSeatRuntime {
         // which handles window management (move, resize, SSD) itself.
     }
 
+    fn initialize_trackpad_pointer(&mut self, reason: &str) {
+        if self.trackpad_pointer_initialized {
+            return;
+        }
+        let Some(surface) = self.focused_surface.clone() else {
+            return;
+        };
+        let scale = self.output_scale();
+        let (phys_w, phys_h) = self.screen_size;
+        let center = Point::<f64, Logical>::from((
+            phys_w as f64 / scale / 2.0,
+            phys_h as f64 / scale / 2.0,
+        ));
+        let origin = self
+            .wl_to_window
+            .get(&surface)
+            .and_then(|w| self.space.element_location(&WindowElement(w.clone())))
+            .map(|loc| (loc.x as f64, loc.y as f64).into())
+            .unwrap_or_else(|| (0.0, 0.0).into());
+        let pointer = self.pointer.clone();
+        pointer.motion(
+            self,
+            Some((surface, origin)),
+            &PointerMotionEvent {
+                location: center,
+                serial: SERIAL_COUNTER.next_serial(),
+                time: engine_timing::now_ms_u32(),
+            },
+        );
+        pointer.frame(self);
+        self.trackpad_pointer_initialized = true;
+        self.injected_events += 1;
+        self.last_cursor_mode = format!("trackpad:centered:{reason}");
+    }
+
     fn handle_trackpad_down(&mut self, id: i32, point: &TouchPoint) {
         self.trackpad_anchor = Some((point.x, point.y));
         if self.active_touch_ids.is_empty() {
@@ -274,6 +309,7 @@ impl AndroidSeatRuntime {
         if self.focused_surface.is_none() {
             self.apply_forced_focus("trackpad_down");
         }
+        self.initialize_trackpad_pointer("down");
         self.last_seat_dispatch =
             format!("trackpad_down id={} x={:.0} y={:.0}", id, point.x, point.y);
     }
@@ -320,14 +356,14 @@ impl AndroidSeatRuntime {
             }
         }
 
-        // Apply sensitivity and acceleration.
-        // Reduced base sensitivity for precise control.
-        // Base multiplier 1.5x, acceleration adds up to 3x for fast swipes.
+        // Keep long-press dragging at the same gain as ordinary trackpad
+        // motion. The old extra 1.5x..4.5x acceleration saturated the cursor
+        // at an output edge during a single drag, making it look as if it had
+        // disappeared.
         let speed = (raw_dx * raw_dx + raw_dy * raw_dy).sqrt();
-        let accel = 1.0 + (speed / 150.0).min(2.0);
         let s = self.relative_sensitivity;
-        let dx = raw_dx * 1.5 * accel * s;
-        let dy = raw_dy * 1.5 * accel * s;
+        let dx = raw_dx * s;
+        let dy = raw_dy * s;
 
         // Clamp to logical output bounds (physical / scale).
         let scale = self.output_scale();
@@ -860,6 +896,7 @@ impl AndroidSeatRuntime {
         if self.focused_surface.is_none() {
             self.apply_forced_focus("trackpad_rel");
         }
+        self.initialize_trackpad_pointer("relative");
         let p = self.pointer.clone();
 
         // Clamp to logical output bounds (physical / scale).
@@ -913,6 +950,45 @@ impl AndroidSeatRuntime {
             dx, dy, time
         ));
         self.last_seat_dispatch = format!("trackpad_rel dx={:.0} dy={:.0}", dx, dy);
+    }
+
+    pub(crate) fn inject_trackpad_scroll(
+        &mut self,
+        dx: f32,
+        dy: f32,
+        time: u32,
+        finished: bool,
+    ) {
+        if self.current_input_mode != WinlandInputMode::Trackpad {
+            return;
+        }
+        if self.focused_surface.is_none() {
+            self.apply_forced_focus("trackpad_scroll");
+        }
+        self.initialize_trackpad_pointer("scroll");
+        let pointer = self.pointer.clone();
+        let mut axis = AxisFrame::new(time).source(AxisSource::Finger);
+        if finished {
+            axis = axis.stop(Axis::Horizontal).stop(Axis::Vertical);
+            self.last_seat_dispatch = "trackpad_scroll_end".into();
+        } else {
+            let scale = self.output_scale() as f32;
+            let sensitivity =
+                crate::android::command_channel::get_scroll_sensitivity();
+            let value_x = -(dx / scale) * sensitivity;
+            let value_y = -(dy / scale) * sensitivity;
+            if value_x != 0.0 {
+                axis = axis.value(Axis::Horizontal, value_x as f64);
+            }
+            if value_y != 0.0 {
+                axis = axis.value(Axis::Vertical, value_y as f64);
+            }
+            self.last_seat_dispatch =
+                format!("trackpad_scroll dx={dx:.1} dy={dy:.1}");
+        }
+        pointer.axis(self, axis);
+        pointer.frame(self);
+        self.injected_events += 1;
     }
 
     pub(crate) fn inject_trackpad_click(&mut self, state: i32, button: i32, time: u32) {
@@ -1087,6 +1163,19 @@ impl AndroidSeatRuntime {
                     self.handle_trackpad_up(*id);
                 }
                 RoutedInputEvent::TouchCancel { .. } => {
+                    if self.trackpad_dragging {
+                        let pointer = self.pointer.clone();
+                        pointer.button(
+                            self,
+                            &ButtonEvent {
+                                serial: SERIAL_COUNTER.next_serial(),
+                                time: engine_timing::now_ms_u32(),
+                                button: 0x110,
+                                state: ButtonState::Released,
+                            },
+                        );
+                        pointer.frame(self);
+                    }
                     self.trackpad_anchor = None;
                     self.trackpad_moved = false;
                     self.trackpad_dragging = false;

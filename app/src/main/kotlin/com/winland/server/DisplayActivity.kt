@@ -992,7 +992,9 @@ class DisplayActivity : ComponentActivity() {
             IDLE,
             TAP_PENDING,
             DRAG_ACTIVE,
-            MOVING
+            MOVING,
+            TWO_FINGER_PENDING,
+            TWO_FINGER_SCROLL
         }
 
         private var gestureState = GestureState.IDLE
@@ -1001,6 +1003,11 @@ class DisplayActivity : ComponentActivity() {
         private var primaryDownY = 0f
         private var lastDragX = 0f
         private var lastDragY = 0f
+        private var twoFingerStartX = 0f
+        private var twoFingerStartY = 0f
+        private var twoFingerLastX = 0f
+        private var twoFingerLastY = 0f
+        private var suppressNextPrimaryUp = false
 
         private val longPressRunnable = Runnable {
             if (gestureState != GestureState.TAP_PENDING) return@Runnable
@@ -1056,22 +1063,33 @@ class DisplayActivity : ComponentActivity() {
 
             val actionMasked = event.actionMasked
 
-            // Two-finger right-click: forward second finger to Rust state machine.
-            // The was_armed logic in route_touch handles the context-menu trigger.
+            // A two-finger gesture is resolved here rather than in the Rust
+            // single-pointer trackpad state machine: a stationary pair becomes
+            // right click, while centroid movement becomes smooth axis scroll.
             if (actionMasked == android.view.MotionEvent.ACTION_POINTER_DOWN
                 && event.pointerCount >= 2
             ) {
-                if (gestureState == GestureState.TAP_PENDING || gestureState == GestureState.DRAG_ACTIVE) {
-                    mainHandler.removeCallbacks(longPressRunnable)
+                mainHandler.removeCallbacks(longPressRunnable)
+                var cx = 0f
+                var cy = 0f
+                for (i in 0 until event.pointerCount) {
+                    cx += event.getX(i)
+                    cy += event.getY(i)
                 }
+                cx /= event.pointerCount
+                cy /= event.pointerCount
+                twoFingerStartX = cx
+                twoFingerStartY = cy
+                twoFingerLastX = cx
+                twoFingerLastY = cy
+                gestureState = GestureState.TWO_FINGER_PENDING
+                suppressNextPrimaryUp = false
                 if (NativeBridge.isLoaded()) {
-                    val i = event.actionIndex
-                    val pointerId = event.getPointerId(i)
-                    val x = event.getX(i)
-                    val y = event.getY(i)
+                    // Clear the first-finger tap/drag state. TouchCancel also
+                    // releases a held drag button before scrolling begins.
                     NativeBridge.sendTouchEvent(
-                        android.view.MotionEvent.ACTION_POINTER_DOWN,
-                        pointerId, x, y
+                        android.view.MotionEvent.ACTION_CANCEL,
+                        primaryPointerId, primaryDownX, primaryDownY
                     )
                 }
                 return true
@@ -1100,6 +1118,37 @@ class DisplayActivity : ComponentActivity() {
                 }
 
                 android.view.MotionEvent.ACTION_MOVE -> {
+                    if ((gestureState == GestureState.TWO_FINGER_PENDING ||
+                            gestureState == GestureState.TWO_FINGER_SCROLL) &&
+                        event.pointerCount >= 2
+                    ) {
+                        var cx = 0f
+                        var cy = 0f
+                        for (i in 0 until event.pointerCount) {
+                            cx += event.getX(i)
+                            cy += event.getY(i)
+                        }
+                        cx /= event.pointerCount
+                        cy /= event.pointerCount
+                        val totalDx = cx - twoFingerStartX
+                        val totalDy = cy - twoFingerStartY
+                        if (gestureState == GestureState.TWO_FINGER_PENDING &&
+                            totalDx * totalDx + totalDy * totalDy >
+                                LONG_PRESS_MOVE_THRESHOLD_PX * LONG_PRESS_MOVE_THRESHOLD_PX
+                        ) {
+                            gestureState = GestureState.TWO_FINGER_SCROLL
+                        }
+                        if (gestureState == GestureState.TWO_FINGER_SCROLL && NativeBridge.isLoaded()) {
+                            val now = (SystemClock.uptimeMillis() and 0x7FFFFFFF).toInt()
+                            NativeBridge.sendTrackpadScroll(
+                                cx - twoFingerLastX, cy - twoFingerLastY, now, false
+                            )
+                        }
+                        twoFingerLastX = cx
+                        twoFingerLastY = cy
+                        return true
+                    }
+
                     if (gestureState == GestureState.TAP_PENDING) {
                         var movedEnough = false
                         for (i in 0 until event.pointerCount) {
@@ -1161,20 +1210,40 @@ class DisplayActivity : ComponentActivity() {
                 }
 
                 android.view.MotionEvent.ACTION_POINTER_UP -> {
+                    if (gestureState == GestureState.TWO_FINGER_PENDING ||
+                        gestureState == GestureState.TWO_FINGER_SCROLL
+                    ) {
+                        if (NativeBridge.isLoaded()) {
+                            val now = (SystemClock.uptimeMillis() and 0x7FFFFFFF).toInt()
+                            if (gestureState == GestureState.TWO_FINGER_PENDING) {
+                                NativeBridge.sendTrackpadClick(1, 0x111, now)
+                                NativeBridge.sendTrackpadClick(0, 0x111, now)
+                            } else {
+                                NativeBridge.sendTrackpadScroll(0f, 0f, now, true)
+                            }
+                        }
+                        gestureState = GestureState.IDLE
+                        suppressNextPrimaryUp = true
+                        return true
+                    }
                     if (NativeBridge.isLoaded()) {
                         val i = event.actionIndex
-                        val pointerId = event.getPointerId(i)
-                        val x = event.getX(i)
-                        val y = event.getY(i)
                         NativeBridge.sendTouchEvent(
                             android.view.MotionEvent.ACTION_POINTER_UP,
-                            pointerId, x, y
+                            event.getPointerId(i), event.getX(i), event.getY(i)
                         )
                     }
                 }
 
                 android.view.MotionEvent.ACTION_UP -> {
                     mainHandler.removeCallbacks(longPressRunnable)
+                    if (suppressNextPrimaryUp) {
+                        suppressNextPrimaryUp = false
+                        gestureState = GestureState.IDLE
+                        parent?.requestDisallowInterceptTouchEvent(false)
+                        performClick()
+                        return true
+                    }
                     val i = event.actionIndex
                     val pointerId = event.getPointerId(i)
                     val x = event.getX(i)
@@ -1220,6 +1289,11 @@ class DisplayActivity : ComponentActivity() {
 
                 android.view.MotionEvent.ACTION_CANCEL -> {
                     mainHandler.removeCallbacks(longPressRunnable)
+                    if (gestureState == GestureState.TWO_FINGER_SCROLL && NativeBridge.isLoaded()) {
+                        val now = (SystemClock.uptimeMillis() and 0x7FFFFFFF).toInt()
+                        NativeBridge.sendTrackpadScroll(0f, 0f, now, true)
+                    }
+                    suppressNextPrimaryUp = false
                     gestureState = GestureState.IDLE
                     parent?.requestDisallowInterceptTouchEvent(false)
                     for (i in 0 until event.pointerCount) {

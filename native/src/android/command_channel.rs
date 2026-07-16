@@ -24,6 +24,8 @@ pub enum JniCommand {
     /// Trackpad: click event (state: 1=pressed, 0=released, button: 0x110=left, 0x111=right).
     /// Used only in exclusive Trackpad mode.
     TrackpadClick { state: i32, button: i32, time: u32 },
+    /// Trackpad: continuous two-finger scroll, or the terminating axis-stop frame.
+    TrackpadScroll { dx: f32, dy: f32, time: u32, finished: bool },
 
     // ── Lifecycle (with response) ──
     ShutdownCompositor {

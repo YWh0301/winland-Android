@@ -1,5 +1,5 @@
 use jni::{JNIEnv, objects::{JClass, JObject}};
-use jni::sys::{jint, jfloat};
+use jni::sys::{jboolean, jfloat, jint};
 
 #[no_mangle]
 pub extern "system" fn Java_com_winland_server_NativeBridge_onSurfaceChanged(
@@ -150,6 +150,25 @@ pub extern "system" fn Java_com_winland_server_NativeBridge_sendTrackpadClick(
             state,
             button,
             time: time as u32,
+        },
+    );
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_winland_server_NativeBridge_sendTrackpadScroll(
+    _env: JNIEnv,
+    _class: JClass,
+    dx: jfloat,
+    dy: jfloat,
+    time: jint,
+    finished: jboolean,
+) {
+    crate::android::command_channel::send_command(
+        crate::android::command_channel::JniCommand::TrackpadScroll {
+            dx,
+            dy,
+            time: time as u32,
+            finished: finished != 0,
         },
     );
 }
