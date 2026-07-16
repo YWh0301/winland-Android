@@ -26,6 +26,8 @@ pub enum JniCommand {
     TrackpadClick { state: i32, button: i32, time: u32 },
     /// Trackpad: continuous two-finger scroll, or the terminating axis-stop frame.
     TrackpadScroll { dx: f32, dy: f32, time: u32, finished: bool },
+    /// Enable bounded input-to-presentation diagnostic correlation.
+    SetInputLatencyTrace { enabled: bool },
 
     // ── Lifecycle (with response) ──
     ShutdownCompositor {

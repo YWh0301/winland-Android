@@ -155,6 +155,19 @@ pub extern "system" fn Java_com_winland_server_NativeBridge_sendTrackpadClick(
 }
 
 #[no_mangle]
+pub extern "system" fn Java_com_winland_server_NativeBridge_setInputLatencyTrace(
+    _env: JNIEnv,
+    _class: JClass,
+    enabled: jboolean,
+) {
+    crate::android::command_channel::send_command(
+        crate::android::command_channel::JniCommand::SetInputLatencyTrace {
+            enabled: enabled != 0,
+        },
+    );
+}
+
+#[no_mangle]
 pub extern "system" fn Java_com_winland_server_NativeBridge_sendTrackpadScroll(
     _env: JNIEnv,
     _class: JClass,

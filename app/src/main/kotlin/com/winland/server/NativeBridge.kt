@@ -135,6 +135,7 @@ object NativeBridge {
     external fun setInputMode(mode: Int)
     external fun setScrollSensitivity(value: Float)
     external fun setRelativeSensitivity(value: Float)
+    external fun setInputLatencyTrace(enabled: Boolean)
     external fun setRefreshRate(rate: Float)
     external fun setResolution(width: Int, height: Int)
     external fun setScale(scale: Float)

@@ -433,6 +433,7 @@ impl AndroidSeatRuntime {
         );
 
         p.frame(self);
+        self.mark_pointer_input();
 
         engine_timing::emit_hybrid_trace(format!(
             "Trackpad {} id={} dx={:.1} dy={:.1} speed={:.0}",
@@ -975,6 +976,7 @@ impl AndroidSeatRuntime {
             },
         );
         p.frame(self);
+        self.mark_pointer_input();
         self.injected_events += 1;
         engine_timing::emit_hybrid_trace(format!(
             "Trackpad relative_motion dx={:.1} dy={:.1} t={}",

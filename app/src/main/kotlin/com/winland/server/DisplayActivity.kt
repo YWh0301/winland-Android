@@ -566,6 +566,9 @@ class DisplayActivity : ComponentActivity() {
                                     inputPrefs.getInt("input_mode_mask", 1)
                                 }
                                 NativeBridge.setInputMode(inputMode)
+                                NativeBridge.setInputLatencyTrace(
+                                    bridgeOnly && intent.getBooleanExtra("input_latency_trace", false)
+                                )
                                 Log.i("PadputerInput", "configured_input_mode=$inputMode bridgeOnly=$bridgeOnly")
                                 startAhbPresenterIfNeeded(holder.surface)
                                 if (!bridgeOnly && didRequestGuestStart.compareAndSet(false, true)) {

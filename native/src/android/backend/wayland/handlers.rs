@@ -369,6 +369,7 @@ impl CompositorHandler for AndroidSeatRuntime {
             );
         }
 
+        self.note_surface_commit();
         self.render_all();
 
         // Frame callbacks are deliberately not completed synchronously here.

@@ -83,6 +83,7 @@ class MainActivity : ComponentActivity() {
             putExtra("ahb_next_width", source.getIntExtra("ahb_next_width", source.getIntExtra("ahb_width", 1696)))
             putExtra("ahb_next_height", source.getIntExtra("ahb_next_height", source.getIntExtra("ahb_height", 1200)))
             putExtra("input_mode_mask", source.getIntExtra("input_mode_mask", 2))
+            putExtra("input_latency_trace", source.getBooleanExtra("input_latency_trace", false))
             putExtra("distro_id", "bridge")
         })
     }

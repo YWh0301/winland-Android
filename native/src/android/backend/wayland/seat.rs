@@ -128,6 +128,8 @@ use std::sync::Arc;
 #[cfg(feature = "smithay_android")]
 use std::sync::Mutex;
 #[cfg(feature = "smithay_android")]
+use std::time::Instant;
+#[cfg(feature = "smithay_android")]
 use xkbcommon::xkb::{Context as XkbContext, Keymap as XkbKeymap};
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -273,6 +275,11 @@ pub struct AndroidSeatRuntime {
     pub(crate) buffer_last_frame: HashMap<WlBuffer, u64>,
     pub(crate) pending_buffer_releases: Vec<(WlBuffer, u64)>,
     pub(crate) latest_completed_frame: u64,
+    pub(crate) input_latency_trace: bool,
+    pub(crate) source_commit_sequence: u64,
+    pub(crate) pointer_input_sequence: u64,
+    pub(crate) pending_pointer_input: Option<(u64, Instant, u64)>,
+    pub(crate) pointer_frame_timings: HashMap<u64, (u64, Instant)>,
     pub(crate) clipboard_text: Arc<Mutex<String>>,
     pub(crate) last_activation_serial: Option<Serial>,
     pub(crate) trackpad_anchor: Option<(f32, f32)>,
@@ -682,6 +689,11 @@ impl AndroidSeatRuntime {
             buffer_last_frame: HashMap::new(),
             pending_buffer_releases: Vec::new(),
             latest_completed_frame: 0,
+            input_latency_trace: false,
+            source_commit_sequence: 0,
+            pointer_input_sequence: 0,
+            pending_pointer_input: None,
+            pointer_frame_timings: HashMap::new(),
             clipboard_text: Arc::new(Mutex::new(String::new())),
             last_activation_serial: None,
             trackpad_anchor: None,
@@ -1158,6 +1170,22 @@ impl AndroidSeatRuntime {
         self.buffer_last_frame.insert(buffer.clone(), frame);
     }
 
+    pub(crate) fn mark_pointer_input(&mut self) {
+        if !self.input_latency_trace {
+            return;
+        }
+        self.pointer_input_sequence = self.pointer_input_sequence.wrapping_add(1).max(1);
+        self.pending_pointer_input = Some((
+            self.pointer_input_sequence,
+            Instant::now(),
+            self.source_commit_sequence,
+        ));
+    }
+
+    pub(crate) fn note_surface_commit(&mut self) {
+        self.source_commit_sequence = self.source_commit_sequence.wrapping_add(1).max(1);
+    }
+
     fn release_completed_buffers(&mut self) {
         let completed = self.latest_completed_frame;
         let mut waiting = Vec::new();
@@ -1180,6 +1208,20 @@ impl AndroidSeatRuntime {
         if let Some(latest) = completed.iter().copied().max() {
             self.latest_completed_frame = self.latest_completed_frame.max(latest);
             self.release_completed_buffers();
+        }
+        for frame in &completed {
+            if let Some((input, started)) = self.pointer_frame_timings.remove(frame) {
+                log::info!(
+                    "PADPUTER_INPUT_PRESENTED input={} frame={} latency_us={}",
+                    input,
+                    frame,
+                    started.elapsed().as_micros()
+                );
+                if self.pending_pointer_input.is_some_and(|pending| pending.0 == input) {
+                    self.pending_pointer_input = None;
+                }
+                self.pointer_frame_timings.retain(|_, timing| timing.0 != input);
+            }
         }
         if !completed.is_empty() {
             log::debug!("presentation completed compositor frames {:?}; releasing frame callbacks", completed);
@@ -1583,6 +1625,32 @@ impl AndroidSeatRuntime {
         }
 
         if !render_list.is_empty() {
+            if let Some((input, started, commit_at_input)) = self.pending_pointer_input {
+                if self.source_commit_sequence > commit_at_input {
+                    let first_association = !self
+                        .pointer_frame_timings
+                        .values()
+                        .any(|timing| timing.0 == input);
+                    if first_association {
+                        log::info!(
+                            "PADPUTER_INPUT_FRAME_ASSOCIATED input={} frame={} commit={} queue_us={}",
+                            input,
+                            frame,
+                            self.source_commit_sequence,
+                            started.elapsed().as_micros()
+                        );
+                    }
+                    // Keep associating subsequent copies of this committed
+                    // source buffer until one exact frame id is acknowledged;
+                    // the AHB broker intentionally coalesces queued frames.
+                    self.pointer_frame_timings.insert(frame, (input, started));
+                    if self.pointer_frame_timings.len() > 64 {
+                        if let Some(oldest) = self.pointer_frame_timings.keys().copied().min() {
+                            self.pointer_frame_timings.remove(&oldest);
+                        }
+                    }
+                }
+            }
             let _ = self.render_sender.send(crate::android::backend::smithay_backend::RenderFrame {
                 id: frame,
                 items: render_list,

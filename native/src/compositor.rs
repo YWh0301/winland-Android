@@ -191,6 +191,11 @@ pub fn spawn(distro_id: &str) -> Result<(), String> {
                             server.runtime.relative_sensitivity = value;
                         }
                     }
+                    JniCommand::SetInputLatencyTrace { enabled } => {
+                        if let Some(server) = wayland_server.as_mut() {
+                            server.runtime.input_latency_trace = enabled;
+                        }
+                    }
                     JniCommand::SurfaceChanged { width, height, physical_width_mm, physical_height_mm } => {
                         // If the user has requested a specific resolution (via Dashboard),
                         // persist it through Android lifecycle surface recreations.
