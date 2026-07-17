@@ -487,17 +487,18 @@ struct CursorSourceBroker {
     socket: Option<OwnedFd>,
     generation: u32,
     ready: bool,
-    pending: Option<CursorFrame>,
+    pending: std::collections::VecDeque<CursorFrame>,
     sent_serial: u64,
 }
 
 impl CursorSourceBroker {
     fn new() -> Self {
-        Self { socket: None, generation: 0, ready: false, pending: None, sent_serial: 0 }
+        Self { socket: None, generation: 0, ready: false, pending: std::collections::VecDeque::new(), sent_serial: 0 }
     }
 
     fn submit(&mut self, cursor: CursorFrame) {
-        if cursor.image_serial > self.sent_serial {
+        let newest = self.pending.back().map(|item| item.image_serial).unwrap_or(self.sent_serial);
+        if cursor.image_serial > newest {
             let (width, height, kind) = match &cursor.item {
                 RenderItem::DmaBuf { width, height, .. } => (*width, *height, "dmabuf"),
                 RenderItem::Shm { width, height, .. } => (*width, *height, "shm"),
@@ -509,7 +510,7 @@ impl CursorSourceBroker {
             ) {
                 let _ = writeln!(trace, "CURSOR_SOURCE_CAPTURED serial={} kind={} size={}x{} hotspot={},{}", cursor.image_serial, kind, width, height, cursor.hotspot.0, cursor.hotspot.1);
             }
-            self.pending = Some(cursor);
+            self.pending.push_back(cursor);
         }
     }
 
@@ -561,7 +562,7 @@ impl CursorSourceBroker {
         if !self.ensure_connected() { return; }
         self.poll_ready();
         if !self.ready { return; }
-        let Some(cursor) = self.pending.take() else { return; };
+        let Some(cursor) = self.pending.pop_front() else { return; };
         let RenderItem::DmaBuf { fd, fourcc, modifier, offset, stride, width, height, .. } = cursor.item else {
             return;
         };
@@ -935,14 +936,14 @@ pub(crate) fn flush_deferred_composite(
     // Keep only the newest complete compositor frame. Merging queued Vecs
     // duplicates surfaces and destroys frame/damage boundaries.
     let mut latest: Option<RenderFrame> = None;
-    while let Ok(frame) = rx.try_recv() {
-        latest = Some(frame);
-    }
-    if let Some(mut frame) = latest {
+    while let Ok(mut frame) = rx.try_recv() {
         if let Some(cursor) = frame.cursor.take() {
             state.cursor_source_broker.submit(cursor);
         }
-        state.cursor_source_broker.pump();
+        latest = Some(frame);
+    }
+    state.cursor_source_broker.pump();
+    if let Some(frame) = latest {
         let Some(slot) = state.presentation_slots.acquire(frame.id) else {
             log::warn!("dropping compositor frame {}: all presentation slots busy", frame.id);
             return;

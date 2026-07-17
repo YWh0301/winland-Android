@@ -1166,9 +1166,6 @@ impl AndroidSeatRuntime {
             log::debug!("cursor image role has no committed buffer yet");
             return;
         };
-        if self.last_cursor_buffer.as_ref() == Some(&buffer) {
-            return;
-        }
         let scale = with_states(surface, |states| {
             let mut attrs = states.cached_state.get::<SurfaceAttributes>();
             attrs.current().buffer_scale.max(1)
