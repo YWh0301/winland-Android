@@ -193,6 +193,7 @@ class DisplayActivity : ComponentActivity() {
     private val pollHandler = android.os.Handler(android.os.Looper.getMainLooper())
     private val didRequestGuestStart = AtomicBoolean(false)
     private val didStartAhbPresenter = AtomicBoolean(false)
+    private val didStartOuterCursorImageProbe = AtomicBoolean(false)
     private val primaryClipChangedListener = ClipboardManager.OnPrimaryClipChangedListener {
         if (suppressNextClipboardSync) {
             suppressNextClipboardSync = false
@@ -224,6 +225,7 @@ class DisplayActivity : ComponentActivity() {
     private var ahbNextWidth: Int = 1696
     private var ahbNextHeight: Int = 1200
     private var outerCursorProbe: Boolean = false
+    private var outerCursorImageProbe: Boolean = false
     private var outerCursorSerial: Long = 0
     private val outerCursorPoller = object : Runnable {
         override fun run() {
@@ -253,6 +255,12 @@ class DisplayActivity : ComponentActivity() {
         if (result == 0) {
             pollHandler.removeCallbacks(outerCursorPoller)
             pollHandler.post(outerCursorPoller)
+            if (outerCursorImageProbe && didStartOuterCursorImageProbe.compareAndSet(false, true)) {
+                lifecycleScope.launch(Dispatchers.IO) {
+                    val imageResult = AhbPresenterBridge.runOuterCursorImageProbe(ahbGeneration)
+                    Log.i("PadputerOuterCursor", "image probe generation=$ahbGeneration result=$imageResult")
+                }
+            }
         }
     }
 
@@ -329,7 +337,8 @@ class DisplayActivity : ComponentActivity() {
         ahbNextWidth = intent.getIntExtra("ahb_next_width", ahbWidth).coerceAtLeast(1)
         ahbNextHeight = intent.getIntExtra("ahb_next_height", ahbHeight).coerceAtLeast(1)
         outerCursorProbe = intent.getBooleanExtra("outer_cursor_probe", false)
-        Log.i("PadputerOuterCursor", "configured enabled=$outerCursorProbe generation=$ahbGeneration")
+        outerCursorImageProbe = intent.getBooleanExtra("outer_cursor_image_probe", false)
+        Log.i("PadputerOuterCursor", "configured enabled=$outerCursorProbe imageProbe=$outerCursorImageProbe generation=$ahbGeneration")
         distroId = intent.getStringExtra("distro_id") ?: "ubuntu"
         Log.i("WinlandDiag", "onCreate: Entry. Distro: $distroId. Native libraries loaded: ${NativeBridge.isLoaded()}")
         super.onCreate(savedInstanceState)

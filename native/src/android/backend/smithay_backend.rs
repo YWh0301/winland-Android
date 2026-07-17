@@ -454,6 +454,147 @@ struct AhbMessage {
 
 const _: () = assert!(std::mem::size_of::<AhbMessage>() == 48);
 
+const CURSOR_PROTOCOL_MAGIC: u32 = 0x5255_4350;
+const CURSOR_PROTOCOL_VERSION: u16 = 1;
+const CURSOR_POOL_READY: u16 = 2;
+const CURSOR_COPY_REQUEST: u16 = 3;
+const CURSOR_FORMAT_RGBA8888: u32 = 1;
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct CursorMessage {
+    magic: u32,
+    version: u16,
+    message_type: u16,
+    image_serial: u64,
+    generation: u32,
+    slot: u32,
+    fd_count: u32,
+    width: u32,
+    height: u32,
+    stride: u32,
+    format: u32,
+    hotspot_x: i32,
+    hotspot_y: i32,
+    flags: u32,
+    reserved: [u32; 2],
+}
+
+const _: () = assert!(std::mem::size_of::<CursorMessage>() == 64);
+
+#[derive(Debug)]
+struct CursorSourceBroker {
+    socket: Option<OwnedFd>,
+    generation: u32,
+    ready: bool,
+    pending: Option<CursorFrame>,
+    sent_serial: u64,
+}
+
+impl CursorSourceBroker {
+    fn new() -> Self {
+        Self { socket: None, generation: 0, ready: false, pending: None, sent_serial: 0 }
+    }
+
+    fn submit(&mut self, cursor: CursorFrame) {
+        if cursor.image_serial > self.sent_serial {
+            let (width, height, kind) = match &cursor.item {
+                RenderItem::DmaBuf { width, height, .. } => (*width, *height, "dmabuf"),
+                RenderItem::Shm { width, height, .. } => (*width, *height, "shm"),
+            };
+            log::info!("CURSOR_SOURCE_CAPTURED serial={} kind={} size={}x{} hotspot={},{}", cursor.image_serial, kind, width, height, cursor.hotspot.0, cursor.hotspot.1);
+            use std::io::Write as _;
+            if let Ok(mut trace) = std::fs::OpenOptions::new().create(true).append(true).open(
+                "/data/user/0/io.padputer.waylandbridge/files/outer-cursor-source.log",
+            ) {
+                let _ = writeln!(trace, "CURSOR_SOURCE_CAPTURED serial={} kind={} size={}x{} hotspot={},{}", cursor.image_serial, kind, width, height, cursor.hotspot.0, cursor.hotspot.1);
+            }
+            self.pending = Some(cursor);
+        }
+    }
+
+    fn disconnect(&mut self) {
+        self.socket = None;
+        self.generation = 0;
+        self.ready = false;
+    }
+
+    fn ensure_connected(&mut self) -> bool {
+        if self.socket.is_some() { return true; }
+        let Ok(socket) = nix::sys::socket::socket(
+            AddressFamily::Unix, SockType::SeqPacket,
+            SockFlag::SOCK_CLOEXEC | SockFlag::SOCK_NONBLOCK, None,
+        ) else { return false; };
+        let Ok(address) = UnixAddr::new_abstract(b"padputer-cursor-source") else { return false; };
+        if connect(socket.as_raw_fd(), &address).is_err() { return false; }
+        self.socket = Some(socket);
+        true
+    }
+
+    fn poll_ready(&mut self) {
+        let Some(socket) = self.socket.as_ref() else { return; };
+        let mut bytes = [0u8; std::mem::size_of::<CursorMessage>()];
+        let received = {
+            let mut iov = [IoSliceMut::new(&mut bytes)];
+            recvmsg::<()>(socket.as_raw_fd(), &mut iov, None, MsgFlags::MSG_DONTWAIT)
+                .map(|message| message.bytes)
+        };
+        match received {
+            Ok(n) if n == bytes.len() => {
+                let packet = unsafe { std::ptr::read_unaligned(bytes.as_ptr().cast::<CursorMessage>()) };
+                if packet.magic == CURSOR_PROTOCOL_MAGIC && packet.version == CURSOR_PROTOCOL_VERSION &&
+                   packet.message_type == CURSOR_POOL_READY && packet.generation > 0 && packet.fd_count == 0 {
+                    self.generation = packet.generation;
+                    self.ready = true;
+                    log::info!("CURSOR_SOURCE broker ready generation={}", self.generation);
+                } else {
+                    self.disconnect();
+                }
+            }
+            Err(nix::errno::Errno::EAGAIN) => {}
+            Ok(0) | Err(_) => self.disconnect(),
+            Ok(_) => self.disconnect(),
+        }
+    }
+
+    fn pump(&mut self) {
+        if !self.ensure_connected() { return; }
+        self.poll_ready();
+        if !self.ready { return; }
+        let Some(cursor) = self.pending.take() else { return; };
+        let RenderItem::DmaBuf { fd, fourcc, modifier, offset, stride, width, height, .. } = cursor.item else {
+            return;
+        };
+        // Aquamarine's RGBA cursor swapchain is exported as DRM ABGR8888.
+        if fourcc != 0x3432_4241 || modifier != 0 || offset != 0 || width <= 0 || height <= 0 ||
+           cursor.hotspot.0 < 0 || cursor.hotspot.1 < 0 || cursor.hotspot.0 >= width || cursor.hotspot.1 >= height {
+            log::warn!("CURSOR_SOURCE rejected unsupported DMA-BUF metadata");
+            return;
+        }
+        let packet = CursorMessage {
+            magic: CURSOR_PROTOCOL_MAGIC, version: CURSOR_PROTOCOL_VERSION,
+            message_type: CURSOR_COPY_REQUEST, image_serial: cursor.image_serial,
+            generation: self.generation, slot: 1, fd_count: 1,
+            width: width as u32, height: height as u32, stride,
+            format: CURSOR_FORMAT_RGBA8888,
+            hotspot_x: cursor.hotspot.0, hotspot_y: cursor.hotspot.1,
+            flags: 0, reserved: [0, 0],
+        };
+        let bytes = unsafe {
+            std::slice::from_raw_parts((&packet as *const CursorMessage).cast::<u8>(), std::mem::size_of_val(&packet))
+        };
+        let iov = [IoSlice::new(bytes)];
+        let fds = [fd.as_raw_fd()];
+        match sendmsg::<()>(self.socket.as_ref().unwrap().as_raw_fd(), &iov, &[ControlMessage::ScmRights(&fds)], MsgFlags::MSG_NOSIGNAL, None) {
+            Ok(n) if n == bytes.len() => {
+                self.sent_serial = cursor.image_serial;
+                log::info!("CURSOR_SOURCE sent COPY_REQUEST serial={} size={}x{} hotspot={},{}", cursor.image_serial, width, height, cursor.hotspot.0, cursor.hotspot.1);
+            }
+            _ => self.disconnect(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum BrokerSendResult {
     Unsupported,
@@ -680,6 +821,7 @@ pub struct AndroidSmithayState {
     pub gl_cursor_dmabuf_program: Option<u32>,
     presentation_slots: PresentationSlotTracker,
     source_broker: FrameSourceBroker,
+    cursor_source_broker: CursorSourceBroker,
     presentation_sender: crossbeam_channel::Sender<u64>,
 }
 
@@ -714,6 +856,7 @@ impl AndroidSmithayState {
             gl_cursor_dmabuf_program: None,
             presentation_slots: PresentationSlotTracker::new(),
             source_broker: FrameSourceBroker::new(),
+            cursor_source_broker: CursorSourceBroker::new(),
             presentation_sender,
         }
     }
@@ -795,25 +938,16 @@ pub(crate) fn flush_deferred_composite(
     while let Ok(frame) = rx.try_recv() {
         latest = Some(frame);
     }
-    if let Some(frame) = latest {
+    if let Some(mut frame) = latest {
+        if let Some(cursor) = frame.cursor.take() {
+            state.cursor_source_broker.submit(cursor);
+        }
+        state.cursor_source_broker.pump();
         let Some(slot) = state.presentation_slots.acquire(frame.id) else {
             log::warn!("dropping compositor frame {}: all presentation slots busy", frame.id);
             return;
         };
         log::debug!("presenting deferred compositor frame {} in slot {} ({} items)", frame.id, slot, frame.items.len());
-        if let Some(cursor) = frame.cursor.as_ref() {
-            let (width, height, kind) = match &cursor.item {
-                RenderItem::DmaBuf { width, height, .. } => (*width, *height, "dmabuf"),
-                RenderItem::Shm { width, height, .. } => (*width, *height, "shm"),
-            };
-            log::info!("CURSOR_SOURCE_CAPTURED serial={} kind={} size={}x{} hotspot={},{}", cursor.image_serial, kind, width, height, cursor.hotspot.0, cursor.hotspot.1);
-            use std::io::Write as _;
-            if let Ok(mut trace) = std::fs::OpenOptions::new().create(true).append(true).open(
-                "/data/user/0/io.padputer.waylandbridge/files/outer-cursor-source.log",
-            ) {
-                let _ = writeln!(trace, "CURSOR_SOURCE_CAPTURED serial={} kind={} size={}x{} hotspot={},{}", cursor.image_serial, kind, width, height, cursor.hotspot.0, cursor.hotspot.1);
-            }
-        }
         let broker_result = if frame.items.len() == 1 {
             state.source_broker.send(slot, frame.id, &frame.items[0])
         } else {
