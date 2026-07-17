@@ -97,6 +97,12 @@ impl SeatHandler for AndroidSeatRuntime {
     }
 
     fn cursor_image(&mut self, _seat: &Seat<Self>, image: CursorImageStatus) {
+        use std::io::Write as _;
+        if let Ok(mut trace) = std::fs::OpenOptions::new().create(true).append(true).open(
+            "/data/user/0/io.padputer.waylandbridge/files/outer-cursor-source.log",
+        ) {
+            let _ = writeln!(trace, "CURSOR_IMAGE_EVENT {:?}", image);
+        }
         match &image {
             CursorImageStatus::Hidden => self.last_cursor_mode = "hidden".to_string(),
             CursorImageStatus::Named(icon) => self.last_cursor_mode = format!("named:{:?}", icon),
@@ -114,6 +120,13 @@ impl SeatHandler for AndroidSeatRuntime {
                 }
             }
         };
+        let cursor_surface = match self.cursor_status.as_ref() {
+            Some(CursorImageStatus::Surface(surface)) => Some(surface.clone()),
+            _ => None,
+        };
+        if let Some(surface) = cursor_surface.as_ref() {
+            self.capture_cursor_image(surface);
+        }
         crate::android::bridge_clipboard::publish_outer_cursor_visibility(
             self.cursor_status.is_some(),
         );
@@ -429,6 +442,9 @@ impl XdgShellHandler for AndroidSeatRuntime {
 
         log::info!("SmithayRuntime: xdg toplevel configured, setting focus to surface");
         self.focused_surface = Some(wl_surface.clone());
+        // A previous focus initialization may predate this client's wl_pointer
+        // binding. Re-synchronize once on the next Trackpad/key event.
+        self.trackpad_pointer_initialized = false;
 
         if let Some(keyboard) = self.keyboard.clone() {
             keyboard.set_focus(self, Some(wl_surface), SERIAL_COUNTER.next_serial());

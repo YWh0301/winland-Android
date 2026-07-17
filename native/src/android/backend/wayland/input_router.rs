@@ -280,6 +280,21 @@ impl AndroidSeatRuntime {
             .map(|loc| (loc.x as f64, loc.y as f64).into())
             .unwrap_or_else(|| (0.0, 0.0).into());
         let pointer = self.pointer.clone();
+        // Focus may predate a client's wl_pointer resource. Smithay cannot send
+        // the historical enter to that late-bound object, and a same-focus
+        // motion only emits motion. One bounded leave/re-enter at Trackpad
+        // initialization synchronizes the resource and provides the valid enter
+        // serial required by wl_pointer.set_cursor.
+        pointer.motion(
+            self,
+            None,
+            &PointerMotionEvent {
+                location: center,
+                serial: SERIAL_COUNTER.next_serial(),
+                time: engine_timing::now_ms_u32(),
+            },
+        );
+        pointer.frame(self);
         pointer.motion(
             self,
             Some((surface, origin)),
@@ -1314,6 +1329,9 @@ impl AndroidSeatRuntime {
         match event {
             RoutedInputEvent::KeyDown { keycode } => {
                 self.ensure_focus_for_non_pointer("key_down");
+                if self.current_input_mode == WinlandInputMode::Trackpad {
+                    self.initialize_trackpad_pointer("key_down");
+                }
 
                 if *keycode == 61 && self.android_modifiers.alt {
                     let dir = if self.android_modifiers.shift { -1 } else { 1 };

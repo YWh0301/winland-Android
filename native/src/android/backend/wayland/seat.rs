@@ -1,6 +1,6 @@
 use crate::android::backend::wayland::engine_timing;
 #[cfg(feature = "smithay_android")]
-use crate::android::backend::smithay_backend::RenderItem;
+use crate::android::backend::smithay_backend::{CursorFrame, RenderItem};
 #[cfg(feature = "smithay_android")]
 use crate::android::backend::wayland::output_management::OutputManagementState;
 #[cfg(feature = "smithay_android")]
@@ -280,6 +280,9 @@ pub struct AndroidSeatRuntime {
     pub(crate) pointer_input_sequence: u64,
     pub(crate) pending_pointer_input: Option<(u64, Instant, u64)>,
     pub(crate) pointer_frame_timings: HashMap<u64, (u64, Instant)>,
+    pub(crate) last_cursor_buffer: Option<WlBuffer>,
+    pub(crate) pending_cursor_frame: Option<CursorFrame>,
+    pub(crate) cursor_image_serial: u64,
     pub(crate) clipboard_text: Arc<Mutex<String>>,
     pub(crate) last_activation_serial: Option<Serial>,
     pub(crate) trackpad_anchor: Option<(f32, f32)>,
@@ -694,6 +697,9 @@ impl AndroidSeatRuntime {
             pointer_input_sequence: 0,
             pending_pointer_input: None,
             pointer_frame_timings: HashMap::new(),
+            last_cursor_buffer: None,
+            pending_cursor_frame: None,
+            cursor_image_serial: 0,
             clipboard_text: Arc::new(Mutex::new(String::new())),
             last_activation_serial: None,
             trackpad_anchor: None,
@@ -1153,6 +1159,43 @@ impl AndroidSeatRuntime {
         })
     }
 
+    pub(crate) fn capture_cursor_image(&mut self, surface: &WlSurface) {
+        use smithay::wayland::compositor::{with_states, SurfaceAttributes};
+
+        let Some(buffer) = Self::get_surface_buffer(surface) else {
+            log::debug!("cursor image role has no committed buffer yet");
+            return;
+        };
+        if self.last_cursor_buffer.as_ref() == Some(&buffer) {
+            return;
+        }
+        let scale = with_states(surface, |states| {
+            let mut attrs = states.cached_state.get::<SurfaceAttributes>();
+            attrs.current().buffer_scale.max(1)
+        }) as f32;
+        let hotspot = with_states(surface, |states| {
+            states
+                .data_map
+                .get::<CursorImageSurfaceData>()
+                .and_then(|data| data.lock().ok())
+                .map(|guard| guard.hotspot)
+                .unwrap_or(Point::from((0, 0)))
+        });
+        let Some(item) = Self::try_get_dmabuf_render_item(&buffer, 0, 0, scale, true) else {
+            // Formal outer cursor mode is GPU-only. A SHM cursor remains on the
+            // proven software-cursor fallback until a fenced upload path exists.
+            log::warn!("cursor image is not a DMA-BUF; retaining software fallback");
+            return;
+        };
+        self.cursor_image_serial = self.cursor_image_serial.saturating_add(1).max(1);
+        self.pending_cursor_frame = Some(CursorFrame {
+            image_serial: self.cursor_image_serial,
+            hotspot: (hotspot.x, hotspot.y),
+            item,
+        });
+        self.last_cursor_buffer = Some(buffer);
+    }
+
     fn track_surface_buffer_for_frame(&mut self, surface: &WlSurface, buffer: &WlBuffer, frame: u64) {
         let retired = smithay::wayland::compositor::with_states(surface, |states| {
             let mut attrs = states.cached_state.get::<smithay::wayland::compositor::SurfaceAttributes>();
@@ -1579,14 +1622,22 @@ impl AndroidSeatRuntime {
 
                         let buffer_info = Self::get_surface_buffer(wl_surface);
                         if let Some(buffer) = buffer_info {
-                            tracked_buffers.push((wl_surface.clone(), buffer.clone()));
+                            let image_changed = self.last_cursor_buffer.as_ref() != Some(&buffer);
                             if buffer
                                 .data::<smithay::wayland::shm::ShmBufferUserData>()
                                 .is_none()
                             {
                                 if let Some(item) = Self::try_get_dmabuf_render_item(&buffer, cx, cy, surface_scale, true)
                                 {
-                                    let _ = item;
+                                    if image_changed {
+                                        self.cursor_image_serial = self.cursor_image_serial.saturating_add(1).max(1);
+                                        self.pending_cursor_frame = Some(CursorFrame {
+                                            image_serial: self.cursor_image_serial,
+                                            hotspot: (hotspot.x, hotspot.y),
+                                            item,
+                                        });
+                                        self.last_cursor_buffer = Some(buffer.clone());
+                                    }
                                     if log_this {
                                         log::info!("PADPUTER_OUTER_CURSOR_SOURCE kind=dmabuf hotspot={},{} scale={}", hotspot.x, hotspot.y, surface_scale);
                                     }
@@ -1624,8 +1675,17 @@ impl AndroidSeatRuntime {
                                                 surface_scale
                                             );
                                         }
+                                        if image_changed {
+                                            self.cursor_image_serial = self.cursor_image_serial.saturating_add(1).max(1);
+                                            self.pending_cursor_frame = Some(CursorFrame {
+                                                image_serial: self.cursor_image_serial,
+                                                hotspot: (hotspot.x, hotspot.y),
+                                                item: RenderItem::Shm { pixels, x: cx, y: cy, width, height, scale: surface_scale, is_cursor: true },
+                                            });
+                                            self.last_cursor_buffer = Some(buffer.clone());
+                                        }
                                         if log_this {
-                                            log::info!("PADPUTER_OUTER_CURSOR_SOURCE kind=shm width={} height={} stride={} hotspot={},{} bytes={} scale={}", width, height, stride, hotspot.x, hotspot.y, pixels.len(), surface_scale);
+                                            log::info!("PADPUTER_OUTER_CURSOR_SOURCE kind=shm width={} height={} stride={} hotspot={},{} scale={}", width, height, stride, hotspot.x, hotspot.y, surface_scale);
                                         }
                                     }
                                 });
@@ -1672,6 +1732,7 @@ impl AndroidSeatRuntime {
             let _ = self.render_sender.send(crate::android::backend::smithay_backend::RenderFrame {
                 id: frame,
                 items: render_list,
+                cursor: self.pending_cursor_frame.take(),
             });
         }
 

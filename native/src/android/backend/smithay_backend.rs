@@ -722,9 +722,26 @@ impl AndroidSmithayState {
 // SAFETY: The state is owned by the compositor thread (single-thread access).
 unsafe impl Send for AndroidSmithayState {}
 
+pub(crate) struct CursorFrame {
+    pub(crate) image_serial: u64,
+    pub(crate) hotspot: (i32, i32),
+    pub(crate) item: RenderItem,
+}
+
+impl std::fmt::Debug for CursorFrame {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CursorFrame")
+            .field("image_serial", &self.image_serial)
+            .field("hotspot", &self.hotspot)
+            .field("kind", &if matches!(&self.item, RenderItem::DmaBuf { .. }) { "dmabuf" } else { "shm" })
+            .finish()
+    }
+}
+
 pub(crate) struct RenderFrame {
     pub(crate) id: u64,
     pub(crate) items: Vec<RenderItem>,
+    pub(crate) cursor: Option<CursorFrame>,
 }
 
 pub(crate) enum RenderItem {
@@ -784,6 +801,19 @@ pub(crate) fn flush_deferred_composite(
             return;
         };
         log::debug!("presenting deferred compositor frame {} in slot {} ({} items)", frame.id, slot, frame.items.len());
+        if let Some(cursor) = frame.cursor.as_ref() {
+            let (width, height, kind) = match &cursor.item {
+                RenderItem::DmaBuf { width, height, .. } => (*width, *height, "dmabuf"),
+                RenderItem::Shm { width, height, .. } => (*width, *height, "shm"),
+            };
+            log::info!("CURSOR_SOURCE_CAPTURED serial={} kind={} size={}x{} hotspot={},{}", cursor.image_serial, kind, width, height, cursor.hotspot.0, cursor.hotspot.1);
+            use std::io::Write as _;
+            if let Ok(mut trace) = std::fs::OpenOptions::new().create(true).append(true).open(
+                "/data/user/0/io.padputer.waylandbridge/files/outer-cursor-source.log",
+            ) {
+                let _ = writeln!(trace, "CURSOR_SOURCE_CAPTURED serial={} kind={} size={}x{} hotspot={},{}", cursor.image_serial, kind, width, height, cursor.hotspot.0, cursor.hotspot.1);
+            }
+        }
         let broker_result = if frame.items.len() == 1 {
             state.source_broker.send(slot, frame.id, &frame.items[0])
         } else {
