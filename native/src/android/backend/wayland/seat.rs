@@ -1416,15 +1416,26 @@ impl AndroidSeatRuntime {
         }
 
         for (idx, s) in self.unmanaged_surfaces.iter().enumerate() {
-            // Skip cursor surfaces — rendered separately by cursor overlay code at cursor_pos
-            let is_cursor = with_states(s, |states| {
-                states.data_map.get::<CursorImageSurfaceData>().is_some()
-            });
-            if is_cursor {
+            // A committed wl_surface is not displayable until a protocol gives
+            // it a role. Aquamarine uploads its cursor before the first pointer
+            // enter, so it is briefly roleless before set_cursor assigns
+            // CURSOR_IMAGE_ROLE. Never leak either state into desktop frames.
+            let role = smithay::wayland::compositor::get_role(s);
+            let is_cursor = role == Some(smithay::wayland::seat::CURSOR_IMAGE_ROLE)
+                || matches!(
+                    self.cursor_status.as_ref(),
+                    Some(CursorImageStatus::Surface(cursor_surface)) if cursor_surface == s
+                )
+                || with_states(s, |states| {
+                    states.data_map.get::<CursorImageSurfaceData>().is_some()
+                });
+            if role.is_none() || is_cursor {
                 if log_this {
                     log::info!(
-                        "  unmanaged[{}]: skip — cursor surface (rendered as overlay)",
-                        idx
+                        "  unmanaged[{}]: skip role={:?} cursor={} (not a desktop item)",
+                        idx,
+                        role,
+                        is_cursor
                     );
                 }
                 continue;
