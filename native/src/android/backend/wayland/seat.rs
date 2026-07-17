@@ -1527,7 +1527,7 @@ impl AndroidSeatRuntime {
             match cursor_status {
                 CursorImageStatus::Hidden => {}
                 CursorImageStatus::Named(_) => {
-                    let (cursor_pixels, cw, ch) = fallback_cursor_pixels();
+                    let (_cursor_pixels, cw, ch) = fallback_cursor_pixels();
                     let cx = cursor_pos.x as i32 - 1;
                     let cy = cursor_pos.y as i32 - 1;
                     if log_this {
@@ -1539,7 +1539,9 @@ impl AndroidSeatRuntime {
                             ch
                         );
                     }
-                    render_list.push(RenderItem::Shm { pixels: cursor_pixels, x: cx, y: cy, width: cw, height: ch, scale: 1.0, is_cursor: true });
+                    if log_this {
+                        log::info!("PADPUTER_OUTER_CURSOR_SOURCE kind=named width={} height={} hotspot=1,1", cw, ch);
+                    }
                 }
                 CursorImageStatus::Surface(wl_surface) => {
                     if !wl_surface.is_alive() {
@@ -1573,7 +1575,10 @@ impl AndroidSeatRuntime {
                             {
                                 if let Some(item) = Self::try_get_dmabuf_render_item(&buffer, cx, cy, surface_scale, true)
                                 {
-                                    render_list.push(item);
+                                    let _ = item;
+                                    if log_this {
+                                        log::info!("PADPUTER_OUTER_CURSOR_SOURCE kind=dmabuf hotspot={},{} scale={}", hotspot.x, hotspot.y, surface_scale);
+                                    }
                                 } else if log_this {
                                     log::warn!("  cursor: non-SHM and dmabuf read failed");
                                 }
@@ -1608,7 +1613,9 @@ impl AndroidSeatRuntime {
                                                 surface_scale
                                             );
                                         }
-                                        render_list.push(RenderItem::Shm { pixels, x: cx, y: cy, width, height, scale: surface_scale, is_cursor: true });
+                                        if log_this {
+                                            log::info!("PADPUTER_OUTER_CURSOR_SOURCE kind=shm width={} height={} stride={} hotspot={},{} bytes={} scale={}", width, height, stride, hotspot.x, hotspot.y, pixels.len(), surface_scale);
+                                        }
                                     }
                                 });
                             }

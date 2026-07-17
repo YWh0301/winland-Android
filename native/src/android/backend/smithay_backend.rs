@@ -469,12 +469,13 @@ struct FrameSourceBroker {
     /// wire frame ID and originating compositor RenderFrame ID per AHB slot.
     in_flight: [Option<(u64, u64)>; 3],
     generation: u32,
+    expected_size: (u32, u32),
     ready: bool,
 }
 
 impl FrameSourceBroker {
     fn new() -> Self {
-        Self { socket: None, next_frame_id: 1, in_flight: [None; 3], generation: 0, ready: false }
+        Self { socket: None, next_frame_id: 1, in_flight: [None; 3], generation: 0, expected_size: (0, 0), ready: false }
     }
 
     fn ensure_connected(&mut self) -> bool {
@@ -497,6 +498,7 @@ impl FrameSourceBroker {
     fn disconnect(&mut self) {
         self.socket = None;
         self.in_flight = [None; 3];
+        self.expected_size = (0, 0);
         self.ready = false;
     }
 
@@ -514,12 +516,14 @@ impl FrameSourceBroker {
                 Ok(received) if received == bytes.len() => {
                     let packet = unsafe { std::ptr::read_unaligned(bytes.as_ptr().cast::<AhbMessage>()) };
                     if packet.magic == AHB_PROTOCOL_MAGIC && packet.version == AHB_PROTOCOL_VERSION &&
-                       packet.message_type == AHB_POOL_READY && packet.fd_count == 0 && packet.generation > 0 {
+                       packet.message_type == AHB_POOL_READY && packet.fd_count == 0 && packet.generation > 0 &&
+                       packet.width > 0 && packet.height > 0 {
                         self.generation = packet.generation;
+                        self.expected_size = (packet.width, packet.height);
                         self.next_frame_id = 1;
                         self.in_flight = [None; 3];
                         self.ready = true;
-                        log::info!("FRAME_SOURCE POOL_READY generation={}", self.generation);
+                        log::info!("FRAME_SOURCE POOL_READY generation={} size={}x{}", self.generation, packet.width, packet.height);
                         continue;
                     }
                     let valid = packet.magic == AHB_PROTOCOL_MAGIC &&
@@ -566,6 +570,10 @@ impl FrameSourceBroker {
         if !self.ensure_connected() { return BrokerSendResult::Unavailable; }
         let _ = self.poll_consumed();
         if !self.ready { return BrokerSendResult::Backpressured; }
+        if (*width as u32, *height as u32) != self.expected_size {
+            log::warn!("FRAME_SOURCE reject mismatched desktop source {}x{} expected {}x{}", width, height, self.expected_size.0, self.expected_size.1);
+            return BrokerSendResult::Unsupported;
+        }
         let frame_id = self.next_frame_id;
         let wire_slot = ((frame_id - 1) % 3) as u32;
         if self.in_flight[wire_slot as usize].is_some() {
