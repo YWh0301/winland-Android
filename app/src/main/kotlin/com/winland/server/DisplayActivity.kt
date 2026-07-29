@@ -342,6 +342,10 @@ class DisplayActivity : ComponentActivity() {
         distroId = intent.getStringExtra("distro_id") ?: "ubuntu"
         Log.i("WinlandDiag", "onCreate: Entry. Distro: $distroId. Native libraries loaded: ${NativeBridge.isLoaded()}")
         super.onCreate(savedInstanceState)
+        // A prior session may leave the Android IME visible while this Activity
+        // is force-stopped. Always begin a new bridge generation with it hidden;
+        // the terminal surface can explicitly request it again after focus.
+        window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_HIDDEN)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         markAsCurrentActivity()
 
