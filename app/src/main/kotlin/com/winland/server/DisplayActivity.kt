@@ -238,8 +238,8 @@ class DisplayActivity : ComponentActivity() {
             val state = runCatching { NativeBridge.pollOuterCursorState() }.getOrNull()
             if (state != null && state.size >= 4 && state[0] > outerCursorSerial) {
                 val result = AhbPresenterBridge.moveOuterCursor(
-                    ahbGeneration, state[0], state[1].toInt() - 2,
-                    state[2].toInt() - 2, state[3] != 0L
+                    ahbGeneration, state[0], state[1].toInt(),
+                    state[2].toInt(), state[3] != 0L
                 )
                 if (result == 0) outerCursorSerial = state[0]
             }
@@ -265,11 +265,12 @@ class DisplayActivity : ComponentActivity() {
         outerCursorSerial = 0
         val outerScale = resources.displayMetrics.widthPixels.toFloat() / ahbWidth.toFloat()
         NativeBridge.setOuterCursorScale(outerScale)
-        val initialX = (ahbWidth * outerScale / 2f).toInt() - 2
-        val initialY = (ahbHeight * outerScale / 2f).toInt() - 2
+        val initialX = (ahbWidth * outerScale / 2f).toInt()
+        val initialY = (ahbHeight * outerScale / 2f).toInt()
         val result = AhbPresenterBridge.createOuterCursor(
             surface, ahbGeneration, initialX, initialY,
-            visible = false, diagnosticBuffer = !outerCursorController
+            visible = false, diagnosticBuffer = !outerCursorController,
+            outerScale = outerScale
         )
         Log.i("PadputerOuterCursor", "create generation=$ahbGeneration result=$result position=$initialX,$initialY scale=$outerScale")
         if (result == 0) {
