@@ -267,7 +267,10 @@ class DisplayActivity : ComponentActivity() {
         NativeBridge.setOuterCursorScale(outerScale)
         val initialX = (ahbWidth * outerScale / 2f).toInt() - 2
         val initialY = (ahbHeight * outerScale / 2f).toInt() - 2
-        val result = AhbPresenterBridge.createOuterCursor(surface, ahbGeneration, initialX, initialY)
+        val result = AhbPresenterBridge.createOuterCursor(
+            surface, ahbGeneration, initialX, initialY,
+            visible = false, diagnosticBuffer = !outerCursorController
+        )
         Log.i("PadputerOuterCursor", "create generation=$ahbGeneration result=$result position=$initialX,$initialY scale=$outerScale")
         if (result == 0) {
             pollHandler.removeCallbacks(outerCursorPoller)

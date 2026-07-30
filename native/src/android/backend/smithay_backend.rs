@@ -458,7 +458,9 @@ const CURSOR_PROTOCOL_MAGIC: u32 = 0x5255_4350;
 const CURSOR_PROTOCOL_VERSION: u16 = 1;
 const CURSOR_POOL_READY: u16 = 2;
 const CURSOR_COPY_REQUEST: u16 = 3;
+const CURSOR_SLOT_REUSABLE: u16 = 7;
 const CURSOR_FORMAT_RGBA8888: u32 = 1;
+const CURSOR_FLAG_DUAL_SLOT: u32 = 1 << 2;
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -487,13 +489,21 @@ struct CursorSourceBroker {
     socket: Option<OwnedFd>,
     generation: u32,
     ready: bool,
+    dual_slot: bool,
     pending: std::collections::VecDeque<CursorFrame>,
+    available_slots: std::collections::VecDeque<u32>,
+    in_flight_serials: [u64; 2],
     sent_serial: u64,
 }
 
 impl CursorSourceBroker {
     fn new() -> Self {
-        Self { socket: None, generation: 0, ready: false, pending: std::collections::VecDeque::new(), sent_serial: 0 }
+        Self {
+            socket: None, generation: 0, ready: false, dual_slot: false,
+            pending: std::collections::VecDeque::new(),
+            available_slots: std::collections::VecDeque::new(),
+            in_flight_serials: [0; 2], sent_serial: 0,
+        }
     }
 
     fn submit(&mut self, cursor: CursorFrame) {
@@ -518,6 +528,9 @@ impl CursorSourceBroker {
         self.socket = None;
         self.generation = 0;
         self.ready = false;
+        self.dual_slot = false;
+        self.available_slots.clear();
+        self.in_flight_serials = [0; 2];
     }
 
     fn ensure_connected(&mut self) -> bool {
@@ -532,50 +545,80 @@ impl CursorSourceBroker {
         true
     }
 
-    fn poll_ready(&mut self) {
-        let Some(socket) = self.socket.as_ref() else { return; };
-        let mut bytes = [0u8; std::mem::size_of::<CursorMessage>()];
-        let received = {
-            let mut iov = [IoSliceMut::new(&mut bytes)];
-            recvmsg::<()>(socket.as_raw_fd(), &mut iov, None, MsgFlags::MSG_DONTWAIT)
-                .map(|message| message.bytes)
-        };
-        match received {
-            Ok(n) if n == bytes.len() => {
-                let packet = unsafe { std::ptr::read_unaligned(bytes.as_ptr().cast::<CursorMessage>()) };
-                if packet.magic == CURSOR_PROTOCOL_MAGIC && packet.version == CURSOR_PROTOCOL_VERSION &&
-                   packet.message_type == CURSOR_POOL_READY && packet.generation > 0 && packet.fd_count == 0 {
-                    self.generation = packet.generation;
-                    self.ready = true;
-                    log::info!("CURSOR_SOURCE broker ready generation={}", self.generation);
-                } else {
+    fn poll_control(&mut self) {
+        loop {
+            let Some(socket) = self.socket.as_ref() else { return; };
+            let mut bytes = [0u8; std::mem::size_of::<CursorMessage>()];
+            let received = {
+                let mut iov = [IoSliceMut::new(&mut bytes)];
+                recvmsg::<()>(socket.as_raw_fd(), &mut iov, None, MsgFlags::MSG_DONTWAIT)
+                    .map(|message| message.bytes)
+            };
+            match received {
+                Ok(n) if n == bytes.len() => {
+                    let packet = unsafe { std::ptr::read_unaligned(bytes.as_ptr().cast::<CursorMessage>()) };
+                    let common_valid = packet.magic == CURSOR_PROTOCOL_MAGIC &&
+                        packet.version == CURSOR_PROTOCOL_VERSION && packet.generation > 0 &&
+                        packet.slot < 2 && packet.fd_count == 0 && packet.reserved == [0, 0];
+                    if common_valid && packet.message_type == CURSOR_POOL_READY &&
+                       packet.image_serial == 0 && packet.width == 0 && packet.height == 0 &&
+                       packet.stride == 0 && packet.format == 0 &&
+                       packet.flags & !CURSOR_FLAG_DUAL_SLOT == 0 && !self.ready {
+                        self.generation = packet.generation;
+                        self.ready = true;
+                        self.dual_slot = packet.flags & CURSOR_FLAG_DUAL_SLOT != 0;
+                        // Legacy bounded probes serialize through slot 1. Product
+                        // controllers explicitly advertise dual-slot readiness.
+                        self.available_slots.push_back(1);
+                        if self.dual_slot { self.available_slots.push_back(0); }
+                        log::info!("CURSOR_SOURCE broker ready generation={} dual_slot={}", self.generation, self.dual_slot);
+                    } else if common_valid && packet.message_type == CURSOR_SLOT_REUSABLE &&
+                              self.ready && packet.generation == self.generation &&
+                              packet.flags == 0 && packet.image_serial != 0 && packet.width == 0 && packet.height == 0 &&
+                              packet.stride == 0 && packet.format == 0 &&
+                              self.in_flight_serials[packet.slot as usize] == packet.image_serial {
+                        self.in_flight_serials[packet.slot as usize] = 0;
+                        self.available_slots.push_back(if self.dual_slot { packet.slot } else { 1 });
+                        log::info!("CURSOR_SOURCE slot reusable generation={} slot={} serial={}",
+                            packet.generation, packet.slot, packet.image_serial);
+                    } else {
+                        self.disconnect();
+                        return;
+                    }
+                }
+                Err(nix::errno::Errno::EAGAIN) => return,
+                Ok(0) | Err(_) | Ok(_) => {
                     self.disconnect();
+                    return;
                 }
             }
-            Err(nix::errno::Errno::EAGAIN) => {}
-            Ok(0) | Err(_) => self.disconnect(),
-            Ok(_) => self.disconnect(),
         }
     }
 
     fn pump(&mut self) {
         if !self.ensure_connected() { return; }
-        self.poll_ready();
+        self.poll_control();
         if !self.ready { return; }
-        let Some(cursor) = self.pending.pop_front() else { return; };
+        let Some(slot) = self.available_slots.pop_front() else { return; };
+        let Some(cursor) = self.pending.pop_front() else {
+            self.available_slots.push_front(slot);
+            return;
+        };
         let RenderItem::DmaBuf { fd, fourcc, modifier, offset, stride, width, height, .. } = cursor.item else {
+            self.available_slots.push_front(slot);
             return;
         };
         // Aquamarine's RGBA cursor swapchain is exported as DRM ABGR8888.
         if fourcc != 0x3432_4241 || modifier != 0 || offset != 0 || width <= 0 || height <= 0 ||
            cursor.hotspot.0 < 0 || cursor.hotspot.1 < 0 || cursor.hotspot.0 >= width || cursor.hotspot.1 >= height {
             log::warn!("CURSOR_SOURCE rejected unsupported DMA-BUF metadata");
+            self.available_slots.push_front(slot);
             return;
         }
         let packet = CursorMessage {
             magic: CURSOR_PROTOCOL_MAGIC, version: CURSOR_PROTOCOL_VERSION,
             message_type: CURSOR_COPY_REQUEST, image_serial: cursor.image_serial,
-            generation: self.generation, slot: 1, fd_count: 1,
+            generation: self.generation, slot, fd_count: 1,
             width: width as u32, height: height as u32, stride,
             format: CURSOR_FORMAT_RGBA8888,
             hotspot_x: cursor.hotspot.0, hotspot_y: cursor.hotspot.1,
@@ -589,9 +632,10 @@ impl CursorSourceBroker {
         match sendmsg::<()>(self.socket.as_ref().unwrap().as_raw_fd(), &iov, &[ControlMessage::ScmRights(&fds)], MsgFlags::MSG_NOSIGNAL, None) {
             Ok(n) if n == bytes.len() => {
                 self.sent_serial = cursor.image_serial;
-                log::info!("CURSOR_SOURCE sent COPY_REQUEST serial={} size={}x{} hotspot={},{}", cursor.image_serial, width, height, cursor.hotspot.0, cursor.hotspot.1);
+                self.in_flight_serials[slot as usize] = cursor.image_serial;
+                log::info!("CURSOR_SOURCE sent COPY_REQUEST serial={} slot={} size={}x{} hotspot={},{}", cursor.image_serial, slot, width, height, cursor.hotspot.0, cursor.hotspot.1);
             }
-            _ => self.disconnect(),
+            _ => self.disconnect()
         }
     }
 }

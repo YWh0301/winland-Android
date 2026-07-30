@@ -12,7 +12,7 @@ object AhbPresenterBridge {
     @JvmStatic private external fun nativeArmOuterCursorController(generation: Int): Int
     @JvmStatic private external fun nativeRunOuterCursorController(generation: Int): Int
     @JvmStatic private external fun nativeStopOuterCursorController(generation: Int): Int
-    @JvmStatic private external fun nativeCreateOuterCursor(surface: Surface, generation: Int, x: Int, y: Int, visible: Boolean): Int
+    @JvmStatic private external fun nativeCreateOuterCursor(surface: Surface, generation: Int, x: Int, y: Int, visible: Boolean, diagnosticBuffer: Boolean): Int
     @JvmStatic private external fun nativeMoveOuterCursor(generation: Int, serial: Long, x: Int, y: Int, visible: Boolean): Int
     @JvmStatic private external fun nativeDestroyOuterCursor(generation: Int): Int
 
@@ -24,8 +24,8 @@ object AhbPresenterBridge {
     fun armOuterCursorController(generation: Int): Int = nativeArmOuterCursorController(generation)
     fun runOuterCursorController(generation: Int): Int = nativeRunOuterCursorController(generation)
     fun stopOuterCursorController(generation: Int): Int = nativeStopOuterCursorController(generation)
-    fun createOuterCursor(surface: Surface, generation: Int, x: Int, y: Int, visible: Boolean = false): Int =
-        nativeCreateOuterCursor(surface, generation, x, y, visible)
+    fun createOuterCursor(surface: Surface, generation: Int, x: Int, y: Int, visible: Boolean = false, diagnosticBuffer: Boolean = true): Int =
+        nativeCreateOuterCursor(surface, generation, x, y, visible, diagnosticBuffer)
     fun moveOuterCursor(generation: Int, serial: Long, x: Int, y: Int, visible: Boolean = true): Int =
         nativeMoveOuterCursor(generation, serial, x, y, visible)
     fun destroyOuterCursor(generation: Int): Int = nativeDestroyOuterCursor(generation)
