@@ -86,6 +86,7 @@ class MainActivity : ComponentActivity() {
             putExtra("input_latency_trace", source.getBooleanExtra("input_latency_trace", false))
             putExtra("outer_cursor_probe", source.getBooleanExtra("outer_cursor_probe", false))
             putExtra("outer_cursor_image_probe", source.getBooleanExtra("outer_cursor_image_probe", false))
+            putExtra("outer_cursor_controller", source.getBooleanExtra("outer_cursor_controller", false))
             putExtra("distro_id", "bridge")
         })
     }

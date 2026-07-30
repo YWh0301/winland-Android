@@ -194,6 +194,10 @@ class DisplayActivity : ComponentActivity() {
     private val didRequestGuestStart = AtomicBoolean(false)
     private val didStartAhbPresenter = AtomicBoolean(false)
     private val didStartOuterCursorImageProbe = AtomicBoolean(false)
+    private val didStartOuterCursorController = AtomicBoolean(false)
+    private val outerCursorControllerStopRequested = AtomicBoolean(false)
+    private val outerCursorControllerRestartPending = AtomicBoolean(false)
+    @Volatile private var outerCursorControllerSurface: android.view.Surface? = null
     private val primaryClipChangedListener = ClipboardManager.OnPrimaryClipChangedListener {
         if (suppressNextClipboardSync) {
             suppressNextClipboardSync = false
@@ -226,6 +230,7 @@ class DisplayActivity : ComponentActivity() {
     private var ahbNextHeight: Int = 1200
     private var outerCursorProbe: Boolean = false
     private var outerCursorImageProbe: Boolean = false
+    private var outerCursorController: Boolean = false
     private var outerCursorSerial: Long = 0
     private val outerCursorPoller = object : Runnable {
         override fun run() {
@@ -243,8 +248,20 @@ class DisplayActivity : ComponentActivity() {
     }
 
     private fun createOuterCursorIfNeeded(surface: android.view.Surface) {
-        Log.i("PadputerOuterCursor", "create requested bridgeOnly=$bridgeOnly presenter=$ahbPresenter enabled=$outerCursorProbe valid=${surface.isValid}")
+        Log.i("PadputerOuterCursor", "create requested bridgeOnly=$bridgeOnly presenter=$ahbPresenter enabled=$outerCursorProbe controller=$outerCursorController valid=${surface.isValid}")
         if (!bridgeOnly || !ahbPresenter || !outerCursorProbe) return
+        if (outerCursorController && didStartOuterCursorController.get()) {
+            // A prior Surface generation is still draining its release fences and
+            // POOL_DESTROY acknowledgement. Never replace its SurfaceControl or
+            // AHB ownership underneath it; retry after the controller exits.
+            outerCursorControllerSurface = surface
+            outerCursorControllerStopRequested.set(false)
+            outerCursorControllerRestartPending.set(true)
+            Log.i("PadputerOuterCursor", "controller recreation deferred generation=$ahbGeneration")
+            return
+        }
+        outerCursorControllerSurface = surface
+        outerCursorControllerStopRequested.set(false)
         outerCursorSerial = 0
         val outerScale = resources.displayMetrics.widthPixels.toFloat() / ahbWidth.toFloat()
         NativeBridge.setOuterCursorScale(outerScale)
@@ -255,7 +272,29 @@ class DisplayActivity : ComponentActivity() {
         if (result == 0) {
             pollHandler.removeCallbacks(outerCursorPoller)
             pollHandler.post(outerCursorPoller)
-            if (outerCursorImageProbe && didStartOuterCursorImageProbe.compareAndSet(false, true)) {
+            if (outerCursorController && didStartOuterCursorController.compareAndSet(false, true)) {
+                val armResult = AhbPresenterBridge.armOuterCursorController(ahbGeneration)
+                if (armResult != 0) {
+                    didStartOuterCursorController.set(false)
+                    Log.e("PadputerOuterCursor", "controller arm generation=$ahbGeneration result=$armResult")
+                    return
+                }
+                lifecycleScope.launch(Dispatchers.IO) {
+                    // nativeArm makes an immediately-following Surface destroy
+                    // observable even if this IO coroutine has not started yet.
+                    val controllerResult = AhbPresenterBridge.runOuterCursorController(ahbGeneration)
+                    Log.i("PadputerOuterCursor", "controller generation=$ahbGeneration result=$controllerResult")
+                    didStartOuterCursorController.set(false)
+                    AhbPresenterBridge.destroyOuterCursor(ahbGeneration)
+                    if (outerCursorControllerRestartPending.getAndSet(false) &&
+                        !outerCursorControllerStopRequested.get()) {
+                        withContext(Dispatchers.Main) {
+                            outerCursorControllerSurface?.takeIf { it.isValid }
+                                ?.let { createOuterCursorIfNeeded(it) }
+                        }
+                    }
+                }
+            } else if (outerCursorImageProbe && didStartOuterCursorImageProbe.compareAndSet(false, true)) {
                 lifecycleScope.launch(Dispatchers.IO) {
                     val imageResult = AhbPresenterBridge.runOuterCursorImageProbe(ahbGeneration)
                     Log.i("PadputerOuterCursor", "image probe generation=$ahbGeneration result=$imageResult")
@@ -267,6 +306,16 @@ class DisplayActivity : ComponentActivity() {
     private fun destroyOuterCursorIfNeeded() {
         if (!outerCursorProbe) return
         pollHandler.removeCallbacks(outerCursorPoller)
+        outerCursorControllerSurface = null
+        outerCursorControllerRestartPending.set(false)
+        if (outerCursorController && didStartOuterCursorController.get()) {
+            outerCursorControllerStopRequested.set(true)
+            val stopResult = AhbPresenterBridge.stopOuterCursorController(ahbGeneration)
+            Log.i("PadputerOuterCursor", "controller stop requested generation=$ahbGeneration result=$stopResult")
+            // The controller coroutine destroys the child layer only after all
+            // release fences and the same-generation POOL_DESTROY ack drain.
+            return
+        }
         val result = AhbPresenterBridge.destroyOuterCursor(ahbGeneration)
         Log.i("PadputerOuterCursor", "destroy generation=$ahbGeneration result=$result")
     }
@@ -338,7 +387,11 @@ class DisplayActivity : ComponentActivity() {
         ahbNextHeight = intent.getIntExtra("ahb_next_height", ahbHeight).coerceAtLeast(1)
         outerCursorProbe = intent.getBooleanExtra("outer_cursor_probe", false)
         outerCursorImageProbe = intent.getBooleanExtra("outer_cursor_image_probe", false)
-        Log.i("PadputerOuterCursor", "configured enabled=$outerCursorProbe imageProbe=$outerCursorImageProbe generation=$ahbGeneration")
+        outerCursorController = intent.getBooleanExtra("outer_cursor_controller", false)
+        check(!(outerCursorImageProbe && outerCursorController)) {
+            "outer_cursor_image_probe and outer_cursor_controller are mutually exclusive"
+        }
+        Log.i("PadputerOuterCursor", "configured enabled=$outerCursorProbe imageProbe=$outerCursorImageProbe controller=$outerCursorController generation=$ahbGeneration")
         distroId = intent.getStringExtra("distro_id") ?: "ubuntu"
         Log.i("WinlandDiag", "onCreate: Entry. Distro: $distroId. Native libraries loaded: ${NativeBridge.isLoaded()}")
         super.onCreate(savedInstanceState)
