@@ -124,12 +124,13 @@ impl SeatHandler for AndroidSeatRuntime {
             Some(CursorImageStatus::Surface(surface)) => Some(surface.clone()),
             _ => None,
         };
-        if let Some(surface) = cursor_surface.as_ref() {
-            self.capture_cursor_image(surface);
+        let outer_visible = cursor_surface.as_ref()
+            .map(|surface| self.capture_cursor_image(surface))
+            .unwrap_or(false);
+        if !outer_visible {
+            self.queue_cursor_visibility(false);
         }
-        crate::android::bridge_clipboard::publish_outer_cursor_visibility(
-            self.cursor_status.is_some(),
-        );
+        crate::android::bridge_clipboard::publish_outer_cursor_visibility(outer_visible);
     }
 
     fn focus_changed(&mut self, seat: &Seat<Self>, focused: Option<&WlSurface>) {
@@ -139,6 +140,7 @@ impl SeatHandler for AndroidSeatRuntime {
         if focused.is_none() {
             self.cursor_status = None;
             self.last_cursor_mode = "fallback:named:Default".to_string();
+            self.queue_cursor_visibility(false);
             crate::android::bridge_clipboard::publish_outer_cursor_visibility(false);
         }
     }
