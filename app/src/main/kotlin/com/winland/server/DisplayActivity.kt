@@ -976,6 +976,8 @@ class DisplayActivity : ComponentActivity() {
             }.onFailure {
                 Log.w("DisplayActivity", "resumeRendering in onResume failed", it)
             }
+            activeSurfaceView?.holder?.surface?.takeIf { it.isValid }
+                ?.let { createOuterCursorIfNeeded(it) }
         }
     }
 
@@ -985,6 +987,7 @@ class DisplayActivity : ComponentActivity() {
             pollHandler.removeCallbacks(clipboardPoller)
             pollHandler.removeCallbacks(imePoller)
             teardownClipboardListener()
+            destroyOuterCursorIfNeeded()
             setNativeRenderingActiveAsync(active = false)
             clearCurrentActivityIfSelf()
             super.onStop()
