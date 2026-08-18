@@ -1193,7 +1193,7 @@ class DisplayActivity : ComponentActivity() {
                     surfaceJob?.cancel()
                     surfaceJob = null
                     onSurfaceDestroyed()
-                    activeSurfaceView = null
+                    if (activeSurfaceView === this@WaylandInputSurfaceView) activeSurfaceView = null
                 }
             })
         }
