@@ -74,6 +74,7 @@ class MainActivity : ComponentActivity() {
 
     private fun launchBridgeDisplay(source: Intent) {
         startActivity(Intent(this, DisplayActivity::class.java).apply {
+            addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
             putExtra("bridge_only", true)
             putExtra("ahb_presenter", source.getBooleanExtra("ahb_presenter", false))
             putExtra("ahb_generation", source.getIntExtra("ahb_generation", 1))
@@ -87,6 +88,7 @@ class MainActivity : ComponentActivity() {
             putExtra("outer_cursor_probe", source.getBooleanExtra("outer_cursor_probe", false))
             putExtra("outer_cursor_image_probe", source.getBooleanExtra("outer_cursor_image_probe", false))
             putExtra("outer_cursor_controller", source.getBooleanExtra("outer_cursor_controller", false))
+            putExtra("recreate_surface", source.getBooleanExtra("recreate_surface", false))
             putExtra("distro_id", "bridge")
         })
     }

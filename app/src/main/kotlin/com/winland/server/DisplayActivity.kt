@@ -54,6 +54,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -231,6 +232,7 @@ class DisplayActivity : ComponentActivity() {
     private var outerCursorProbe: Boolean = false
     private var outerCursorImageProbe: Boolean = false
     private var outerCursorController: Boolean = false
+    private val surfaceEpoch = mutableStateOf(0)
     private var outerCursorSerial: Long = 0
     private val outerCursorPoller = object : Runnable {
         override fun run() {
@@ -449,7 +451,7 @@ class DisplayActivity : ComponentActivity() {
                     .fillMaxSize()
                     .background(Color.Black)
                 ) {
-                    LinuxDisplay()
+                    key(surfaceEpoch.value) { LinuxDisplay() }
 
                     AnimatedVisibility(
                         visible = keyboardVisible,
@@ -494,6 +496,20 @@ class DisplayActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    override fun onNewIntent(intent: android.content.Intent) {
+        super.onNewIntent(intent)
+        if (!intent.getBooleanExtra("recreate_surface", false)) return
+        val requestedGeneration = intent.getIntExtra("ahb_generation", -1)
+        if (!bridgeOnly || requestedGeneration != ahbGeneration ||
+            intent.getBooleanExtra("outer_cursor_controller", false) != outerCursorController) {
+            Log.e("PadputerOuterCursor", "rejected Surface recreation generation=$requestedGeneration active=$ahbGeneration")
+            return
+        }
+        setIntent(intent)
+        surfaceEpoch.value++
+        Log.i("PadputerOuterCursor", "Surface recreation requested epoch=${surfaceEpoch.value} generation=$ahbGeneration")
     }
 
     @Suppress("DEPRECATION")
